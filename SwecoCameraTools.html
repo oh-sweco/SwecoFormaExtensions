@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Axonometric View</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: Sweco Sans, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 12px;
+        font-size: 14px;
+      }
+
+      .panel {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      input, button {
+        font: inherit;
+        padding: 8px 10px;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .hint {
+        opacity: 0.8;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <label>
+        Angle from ground (degrees)
+        <input id="angle" type="number" value="30" min="1" max="89" />
+      </label>
+
+      <button id="apply">Set Axonometric View</button>
+
+      <div class="hint">
+        Forma doesn't allow axonometric or orthographic views by default, but the funcionality is there, just hidden.<br><br>
+        After setting up a view, it can be saved through the standard view management UI and it will be saved correctly.<br><br>
+        Use angle 0 to set up an elevation / section.
+      </div>
+    </div>
+
+    <script type="module">
+      import { Forma } from "https://esm.sh/forma-embedded-view-sdk/auto";
+
+      window.Forma = Forma;
+
+      const angleInput = document.getElementById("angle");
+      const applyButton = document.getElementById("apply");
+
+      function toRadians(deg) {
+        return (deg * Math.PI) / 180;
+      }
+
+      applyButton.addEventListener("click", async () => {
+        try {
+          const angleDeg = Number(angleInput.value);
+          const angleRad = toRadians(angleDeg);
+
+          const cam = await Forma.camera.getCurrent();
+          const target = cam.target;
+
+          const distance = 500;
+
+          const horizontal = distance * Math.cos(angleRad);
+          const vertical = distance * Math.sin(angleRad);
+
+          const position = {
+            x: target.x + horizontal,
+            y: target.y + horizontal,
+            z: target.z + vertical
+          };
+
+          if (cam.type !== "orthographic") {
+            await Forma.camera.switchPerspective();
+          }
+
+          await Forma.camera.move({
+            position,
+            target,
+            transitionTimeMs: 700
+          });
+        } catch (err) {
+          console.error("Failed to set axonometric view:", err);
+          alert("Could not set axonometric view. See console for details.");
+        }
+      });
+    </script>
+  </body>
+</html>
