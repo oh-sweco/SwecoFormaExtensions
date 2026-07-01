@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Axonometric View</title>
+    <title>Axonometric View + Coloring</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -19,7 +19,21 @@
       .panel {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 16px;
+      }
+
+      .section {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid rgba(127, 127, 127, 0.35);
+        border-radius: 8px;
+      }
+
+      .section h2 {
+        margin: 0 0 4px 0;
+        font-size: 14px;
       }
 
       label {
@@ -28,15 +42,19 @@
         gap: 6px;
       }
 
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
       input[type="range"] {
         width: 100%;
       }
 
-      .row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
+      input[type="checkbox"] {
+        transform: translateY(1px);
       }
 
       .value {
@@ -48,20 +66,88 @@
         opacity: 0.8;
         font-size: 12px;
       }
+
+      .preview {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        border: 1px solid rgba(127, 127, 127, 0.5);
+        flex: none;
+      }
+
+      .color-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-left: 22px;
+      }
+
+      .color-picker-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .color-picker-wrap input[type="color"] {
+        width: 46px;
+        height: 32px;
+        padding: 0;
+        border: none;
+        background: transparent;
+      }
+
+      .disabled {
+        opacity: 0.45;
+        pointer-events: none;
+      }
     </style>
   </head>
   <body>
     <div class="panel">
-      <label>
-        Angle from ground
-        <div class="row">
-          <input id="angle" type="range" min="0" max="90" value="30" />
-          <div class="value"><span id="angleValue">30</span>°</div>
+      <div class="section">
+        <h2>Axonometric View</h2>
+        <label>
+          Angle from ground
+          <div class="row">
+            <input id="angle" type="range" min="0" max="90" value="30" />
+            <div class="value"><span id="angleValue">30</span>°</div>
+          </div>
+        </label>
+        <div class="hint">
+          Updates live while dragging, then applies one final instant update on release.
         </div>
-      </label>
+      </div>
 
-      <div class="hint">
-        Updates live while dragging, then applies one final instant update on release.
+      <div class="section">
+        <h2>Geometry Coloring</h2>
+        <label class="row" style="flex-direction: row;">
+          <input id="geometryEnabled" type="checkbox" />
+          <span>Enable geometry coloring</span>
+        </label>
+
+        <div id="geometryControls" class="color-controls disabled">
+          <div class="color-picker-wrap">
+            <input id="geometryColor" type="color" value="#4f8cff" />
+            <div id="geometryPreview" class="preview" style="background:#4f8cff"></div>
+          </div>
+          <div class="hint">Applies a temporary render color to geometry while enabled.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Terrain Coloring</h2>
+        <label class="row" style="flex-direction: row;">
+          <input id="terrainEnabled" type="checkbox" />
+          <span>Enable terrain coloring</span>
+        </label>
+
+        <div id="terrainControls" class="color-controls disabled">
+          <div class="color-picker-wrap">
+            <input id="terrainColor" type="color" value="#4fe08c" />
+            <div id="terrainPreview" class="preview" style="background:#4fe08c"></div>
+          </div>
+          <div class="hint">Applies a temporary terrain color while enabled.</div>
+        </div>
       </div>
     </div>
 
@@ -71,6 +157,16 @@
 
       const angleInput = document.getElementById("angle");
       const angleValue = document.getElementById("angleValue");
+
+      const geometryEnabled = document.getElementById("geometryEnabled");
+      const geometryControls = document.getElementById("geometryControls");
+      const geometryColor = document.getElementById("geometryColor");
+      const geometryPreview = document.getElementById("geometryPreview");
+
+      const terrainEnabled = document.getElementById("terrainEnabled");
+      const terrainControls = document.getElementById("terrainControls");
+      const terrainColor = document.getElementById("terrainColor");
+      const terrainPreview = document.getElementById("terrainPreview");
 
       let updateTimer = null;
       let updateId = 0;
@@ -84,6 +180,21 @@
       function normalize2D(x, y) {
         const len = Math.hypot(x, y) || 1;
         return { x: x / len, y: y / len };
+      }
+
+      function setPreview(el, color) {
+        el.style.background = color;
+      }
+
+      function toggleControls(enabled, controlsEl) {
+        controlsEl.classList.toggle("disabled", !enabled);
+      }
+
+      function scheduleLiveUpdate(angleDeg) {
+        angleValue.textContent = angleDeg;
+
+        if (updateTimer) clearTimeout(updateTimer);
+        updateTimer = setTimeout(() => applyAngle(angleDeg), DRAG_DELAY_MS);
       }
 
       async function applyAngle(angleDeg) {
@@ -129,18 +240,99 @@
         }
       }
 
-      function scheduleLiveUpdate(angleDeg) {
-        angleValue.textContent = angleDeg;
+      // ---- Geometry coloring ----
+      let geometryColorHandle = null;
 
-        if (updateTimer) {
-          clearTimeout(updateTimer);
+      async function applyGeometryColor() {
+        const color = geometryColor.value;
+
+        setPreview(geometryPreview, color);
+
+        if (!geometryEnabled.checked) return;
+
+        // NOTE:
+        // This assumes the Render API exposes a geometry coloring method that accepts color.
+        // If your exact SDK method name differs, I can adapt it to the docs you have.
+        if (geometryColorHandle) {
+          await geometryColorHandle.remove?.();
+          geometryColorHandle = null;
         }
 
-        updateTimer = setTimeout(() => {
-          applyAngle(angleDeg);
-        }, DRAG_DELAY_MS);
+        geometryColorHandle = await Forma.render.geometry.color({
+          color
+        });
       }
 
+      async function clearGeometryColor() {
+        if (geometryColorHandle) {
+          await geometryColorHandle.remove?.();
+          geometryColorHandle = null;
+        }
+      }
+
+      geometryEnabled.addEventListener("change", async () => {
+        toggleControls(geometryEnabled.checked, geometryControls);
+        if (geometryEnabled.checked) {
+          await applyGeometryColor();
+        } else {
+          await clearGeometryColor();
+        }
+      });
+
+      geometryColor.addEventListener("input", async () => {
+        setPreview(geometryPreview, geometryColor.value);
+        if (geometryEnabled.checked) {
+          await applyGeometryColor();
+        }
+      });
+
+      // ---- Terrain coloring ----
+      let terrainColorHandle = null;
+
+      async function applyTerrainColor() {
+        const color = terrainColor.value;
+
+        setPreview(terrainPreview, color);
+
+        if (!terrainEnabled.checked) return;
+
+        if (terrainColorHandle) {
+          await terrainColorHandle.remove?.();
+          terrainColorHandle = null;
+        }
+
+        // NOTE:
+        // This assumes the Terrain API exposes a color/paint method for the terrain object.
+        // If the exact method name differs in your SDK version, I can adjust it.
+        terrainColorHandle = await Forma.terrain.groundTexture.add({
+          color
+        });
+      }
+
+      async function clearTerrainColor() {
+        if (terrainColorHandle) {
+          await terrainColorHandle.remove?.();
+          terrainColorHandle = null;
+        }
+      }
+
+      terrainEnabled.addEventListener("change", async () => {
+        toggleControls(terrainEnabled.checked, terrainControls);
+        if (terrainEnabled.checked) {
+          await applyTerrainColor();
+        } else {
+          await clearTerrainColor();
+        }
+      });
+
+      terrainColor.addEventListener("input", async () => {
+        setPreview(terrainPreview, terrainColor.value);
+        if (terrainEnabled.checked) {
+          await applyTerrainColor();
+        }
+      });
+
+      // Live camera angle behavior
       angleInput.addEventListener("input", () => {
         scheduleLiveUpdate(Number(angleInput.value));
       });
@@ -161,7 +353,11 @@
         applyAngle(Number(angleInput.value));
       });
 
-      // Initialize once.
+      // Initialize UI
+      setPreview(geometryPreview, geometryColor.value);
+      setPreview(terrainPreview, terrainColor.value);
+      toggleControls(false, geometryControls);
+      toggleControls(false, terrainControls);
       applyAngle(Number(angleInput.value));
     </script>
   </body>
