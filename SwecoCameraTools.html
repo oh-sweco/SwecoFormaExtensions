@@ -121,7 +121,7 @@
         </label>
 
         <div class="hint">
-          When enabled, updates live while dragging, then applies one final instant update on release.
+          Auto-updates only when enabled.
         </div>
       </div>
 
@@ -187,8 +187,6 @@
       const DRAG_DELAY_MS = 80;
 
       let selectedPaths = [];
-      let selectionUnsubscribe = null;
-
       let terrainColorHandle = null;
 
       function toRadians(deg) {
@@ -208,29 +206,21 @@
         controlsEl.classList.toggle("disabled", !enabled);
       }
 
-      function scheduleLiveUpdate(angleDeg) {
-        angleValue.textContent = angleDeg;
-
-        if (!axonometryEnabled.checked) return;
-
-        if (updateTimer) clearTimeout(updateTimer);
-        updateTimer = setTimeout(() => applyAngle(angleDeg), DRAG_DELAY_MS);
-      }
-
       async function applyAngle(angleDeg) {
         if (!axonometryEnabled.checked) return;
 
         const myUpdate = ++updateId;
 
         try {
-          const cam = await Forma.camera.getCurrent();
-          const target = cam.target;
-          const pos = cam.position;
+          const current = await Forma.camera.getCurrent();
+          const target = current?.target || { x: 0, y: 0, z: 0 };
+          const position = current?.position || { x: 0, y: 0, z: 100 };
 
-          const dx = pos.x - target.x;
-          const dy = pos.y - target.y;
+          const dx = position.x - target.x;
+          const dy = position.y - target.y;
+          const dz = position.z - target.z;
 
-          const distance = Math.hypot(dx, dy, pos.z - target.z) || 1;
+          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz) || 100;
           const azimuth = Math.atan2(dy, dx);
 
           const elevation = toRadians(angleDeg);
@@ -245,7 +235,7 @@
             z: target.z + verticalOffset
           };
 
-          if (cam.type !== "orthographic") {
+          if (current?.type !== "orthographic") {
             await Forma.camera.switchPerspective();
           }
 
@@ -261,6 +251,15 @@
         }
       }
 
+      function scheduleLiveUpdate(angleDeg) {
+        angleValue.textContent = angleDeg;
+
+        if (!axonometryEnabled.checked) return;
+
+        if (updateTimer) clearTimeout(updateTimer);
+        updateTimer = setTimeout(() => applyAngle(angleDeg), DRAG_DELAY_MS);
+      }
+
       async function commitAxonometry(angleDeg) {
         if (updateTimer) {
           clearTimeout(updateTimer);
@@ -274,12 +273,9 @@
         if (!geometryEnabled.checked) return;
 
         try {
-          if (!selectedPaths.length) {
-            await Forma.render.elementColors.clearAll();
-            return;
-          }
-
           await Forma.render.elementColors.clearAll();
+
+          if (!selectedPaths.length) return;
 
           const pathsToColor = new Map();
           for (const path of selectedPaths) {
@@ -361,15 +357,13 @@
         }
       });
 
-      // Subscribe to selection so geometry coloring follows current selection.
-      selectionUnsubscribe = Forma.selection.subscribe(async ({ paths }) => {
+      Forma.selection.subscribe(({ paths }) => {
         selectedPaths = paths ?? [];
         if (geometryEnabled.checked) {
-          await applyGeometryColor();
+          applyGeometryColor();
         }
       });
 
-      // Axonometry only updates when enabled.
       angleInput.addEventListener("input", () => {
         scheduleLiveUpdate(Number(angleInput.value));
       });
@@ -382,7 +376,6 @@
         commitAxonometry(Number(angleInput.value));
       });
 
-      // Initialize UI.
       setPreview(geometryPreview, geometryColor.value);
       setPreview(terrainPreview, terrainColor.value);
       toggleControls(false, geometryControls);
