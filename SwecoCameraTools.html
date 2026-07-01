@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Axonometric View + Coloring</title>
+    <title>Axonometric View + Site Limit Coloring + Terrain Coloring</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -141,7 +141,6 @@
 
       <div class="section">
         <h2>Geometry Coloring</h2>
-
         <label class="row" style="flex-direction: row;">
           <input id="geometryEnabled" type="checkbox" />
           <span>Enable geometry coloring</span>
@@ -172,14 +171,13 @@
           </div>
 
           <div class="hint">
-            Colors are applied as: inside site limit, outside site limit, then selection override.
+            Geometry is colored in 3 layers: inside site limit, outside site limit, then selection on top.
           </div>
         </div>
       </div>
 
       <div class="section">
         <h2>Terrain Coloring</h2>
-
         <label class="row" style="flex-direction: row;">
           <input id="terrainEnabled" type="checkbox" />
           <span>Enable terrain coloring</span>
@@ -234,10 +232,12 @@
       const applyTerrainBtn = document.getElementById("applyTerrainBtn");
       const clearTerrainBtn = document.getElementById("clearTerrainBtn");
 
+      const TERRAIN_TEXTURE_NAME = "terrainColor";
+
       let updateTimer = null;
       let updateId = 0;
-      let terrainTextureHandle = null;
       let selectionPaths = [];
+      let terrainTextureExists = false;
 
       const DRAG_DELAY_MS = 80;
 
@@ -332,7 +332,9 @@
         for (const category of categories) {
           try {
             const paths = await Forma.geometry.getPathsByCategory({ category });
-            if (paths && paths.length > 0) return { category, paths };
+            if (paths && paths.length > 0) {
+              return { category, paths };
+            }
           } catch {}
         }
         return { category: null, paths: [] };
@@ -349,6 +351,7 @@
         if (!siteLimitSearch.paths.length) return [];
 
         const polygons = [];
+
         for (const path of siteLimitSearch.paths) {
           try {
             const footprint = await Forma.geometry.getFootprint({ path });
@@ -364,33 +367,56 @@
               polygons.push(footprint.coordinates);
             }
           } catch (e) {
-            console.warn("Failed to read site limit footprint:", path, e);
+            console.warn("Failed to read site limit footprint for path:", path, e);
           }
         }
 
         return polygons;
       }
 
-      async function getColorablePathsInsideAndOutsideSiteLimit() {
-        const [siteLimitPolygons, allPathsResult] = await Promise.all([
-          getSiteLimitPolygons(),
-          (async () => {
-            const building = await getPathsByAnyCategory(["building", "buildings"]);
-            const roads = await getPathsByAnyCategory(["road", "roads"]);
-            const trees = await getPathsByAnyCategory(["tree", "trees"]);
-            const terrain = await getPathsByAnyCategory(["terrain"]);
-            return [...building.paths, ...roads.paths, ...trees.paths, ...terrain.paths];
-          })()
-        ]);
+      async function getAllCandidateColorablePaths() {
+        const categoryGroups = [
+          ["building", "buildings"],
+          ["generic_volume", "generic volumes", "generic-volumes"],
+          ["sketch_building", "sketch building", "sketch-buildings"],
+          ["road", "roads"],
+          ["tree", "trees"],
+          ["site", "sites"],
+          ["terrain"]
+        ];
 
-        if (!siteLimitPolygons.length) return { inside: [], outside: allPathsResult };
+        const all = [];
+        const seen = new Set();
+
+        for (const group of categoryGroups) {
+          for (const category of group) {
+            try {
+              const paths = await Forma.geometry.getPathsByCategory({ category });
+              for (const p of paths || []) {
+                if (!seen.has(p)) {
+                  seen.add(p);
+                  all.push(p);
+                }
+              }
+            } catch {}
+          }
+        }
+
+        return all;
+      }
+
+      async function getColorablePathsInsideAndOutsideSiteLimit() {
+        const siteLimitPolygons = await getSiteLimitPolygons();
+        const allPaths = await getAllCandidateColorablePaths();
+
+        if (!siteLimitPolygons.length) return { inside: [], outside: allPaths };
 
         const inside = await Forma.geometry.getPathsInsidePolygons({
           polygons: siteLimitPolygons
         });
 
         const insideSet = new Set(inside);
-        const outside = allPathsResult.filter((p) => !insideSet.has(p));
+        const outside = allPaths.filter((p) => !insideSet.has(p));
 
         return { inside, outside };
       }
@@ -399,9 +425,11 @@
         if (!geometryEnabled.checked) return;
 
         try {
-          if (!isValidHexColor(insideColor.value) ||
-              !isValidHexColor(outsideColor.value) ||
-              !isValidHexColor(selectionColor.value)) {
+          if (
+            !isValidHexColor(insideColor.value) ||
+            !isValidHexColor(outsideColor.value) ||
+            !isValidHexColor(selectionColor.value)
+          ) {
             setStatus("Invalid geometry color value.");
             return;
           }
@@ -425,6 +453,7 @@
           }
 
           await Forma.render.elementColors.set({ pathsToColor });
+
           setStatus(
             `Applied geometry colors. Inside: ${inside.length}, outside: ${outside.length}, selection: ${selectionPaths.length}.`
           );
@@ -468,26 +497,22 @@
         ctx.fillStyle = color;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        const handle = await Forma.terrain.groundTexture.add({
-          name: "terrainColor",
+        await Forma.terrain.groundTexture.add({
+          name: TERRAIN_TEXTURE_NAME,
           canvas,
           position: { x: centerX, y: centerY, z: maxZ + 1 },
           scale: { x: width / 100, y: height / 100 }
         });
 
-        return handle;
+        terrainTextureExists = true;
       }
 
       async function applyTerrainColor() {
         if (!terrainEnabled.checked) return;
 
         try {
-          if (terrainTextureHandle?.remove) {
-            await terrainTextureHandle.remove();
-            terrainTextureHandle = null;
-          }
-
-          terrainTextureHandle = await createSolidTerrainTexture(terrainColor.value);
+          await Forma.terrain.groundTexture.remove({ name: TERRAIN_TEXTURE_NAME }).catch(() => {});
+          await createSolidTerrainTexture(terrainColor.value);
           setStatus("Applied terrain color.");
         } catch (err) {
           console.error("Failed to apply terrain color:", err);
@@ -497,10 +522,8 @@
 
       async function clearTerrainColor() {
         try {
-          if (terrainTextureHandle?.remove) {
-            await terrainTextureHandle.remove();
-          }
-          terrainTextureHandle = null;
+          await Forma.terrain.groundTexture.remove({ name: TERRAIN_TEXTURE_NAME }).catch(() => {});
+          terrainTextureExists = false;
           setStatus("Cleared terrain color.");
         } catch (err) {
           console.error("Failed to clear terrain color:", err);
@@ -559,8 +582,10 @@
       setPreview(outsidePreview, outsideColor.value);
       setPreview(selectionPreview, selectionColor.value);
       setPreview(terrainPreview, terrainColor.value);
+
       toggleControls(false, geometryControls);
       toggleControls(false, terrainControls);
+
       angleValue.textContent = angleInput.value;
     </script>
   </body>
