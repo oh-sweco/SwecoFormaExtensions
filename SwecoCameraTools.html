@@ -61,7 +61,7 @@
       </label>
 
       <div class="hint">
-        Updates live. Keeps the current camera orientation and centers on the current target.
+        Updates live while dragging, then applies one final instant update on release.
       </div>
     </div>
 
@@ -72,116 +72,96 @@
       const angleInput = document.getElementById("angle");
       const angleValue = document.getElementById("angleValue");
 
-      let updateToken = 0;
-      let isUpdating = false;
+      let updateTimer = null;
+      let updateId = 0;
+
+      const DRAG_DELAY_MS = 80;
 
       function toRadians(deg) {
         return (deg * Math.PI) / 180;
       }
 
-      function normalize(v) {
-        const len = Math.hypot(v.x, v.y, v.z) || 1;
-        return { x: v.x / len, y: v.y / len, z: v.z / len };
-      }
-
-      function scale(v, s) {
-        return { x: v.x * s, y: v.y * s, z: v.z * s };
-      }
-
-      function add(a, b) {
-        return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
-      }
-
-      function sub(a, b) {
-        return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
-      }
-
-      function cross(a, b) {
-        return {
-          x: a.y * b.z - a.z * b.y,
-          y: a.z * b.x - a.x * b.z,
-          z: a.x * b.y - a.y * b.x
-        };
+      function normalize2D(x, y) {
+        const len = Math.hypot(x, y) || 1;
+        return { x: x / len, y: y / len };
       }
 
       async function applyAngle(angleDeg) {
-        const token = ++updateToken;
-        if (isUpdating) return;
-        isUpdating = true;
+        const myUpdate = ++updateId;
 
         try {
-          const angleRad = toRadians(angleDeg);
           const cam = await Forma.camera.getCurrent();
-
-          // Center on current camera target.
           const target = cam.target;
-          const currentPosition = cam.position;
+          const pos = cam.position;
 
-          // Current view direction.
-          const viewDir = normalize(sub(target, currentPosition));
+          const dx = pos.x - target.x;
+          const dy = pos.y - target.y;
+          const dz = pos.z - target.z;
 
-          // Use world-up for elevation, but preserve current azimuth by using the current
-          // horizontal projection of the view direction.
-          const worldUp = { x: 0, y: 0, z: 1 };
+          const distance = Math.hypot(dx, dy, dz) || 1;
+          const azimuth = Math.atan2(dy, dx);
 
-          const currentHorizontal = {
-            x: viewDir.x,
-            y: viewDir.y,
-            z: 0
+          const elevation = toRadians(angleDeg);
+          const horizontalRadius = Math.cos(elevation) * distance;
+          const verticalOffset = Math.sin(elevation) * distance;
+
+          const dir2D = normalize2D(Math.cos(azimuth), Math.sin(azimuth));
+
+          const newPosition = {
+            x: target.x + dir2D.x * horizontalRadius,
+            y: target.y + dir2D.y * horizontalRadius,
+            z: target.z + verticalOffset
           };
-
-          let horizontalDir = normalize(currentHorizontal);
-
-          // If the current view is close to vertical, fall back to a stable direction
-          // derived from the camera's right vector.
-          if (Math.hypot(horizontalDir.x, horizontalDir.y, horizontalDir.z) < 1e-6) {
-            let right = cross(viewDir, worldUp);
-            if (Math.hypot(right.x, right.y, right.z) < 1e-6) {
-              right = { x: 1, y: 0, z: 0 };
-            }
-            horizontalDir = normalize(right);
-          }
-
-          const distance =
-            Math.hypot(
-              currentPosition.x - target.x,
-              currentPosition.y - target.y,
-              currentPosition.z - target.z
-            ) || 1;
-
-          const horizontalMag = distance * Math.cos(angleRad);
-          const verticalMag = distance * Math.sin(angleRad);
-
-          const horizontalOffset = scale(horizontalDir, horizontalMag);
-          const verticalOffset = scale(worldUp, verticalMag);
-
-          const position = add(target, add(horizontalOffset, verticalOffset));
 
           if (cam.type !== "orthographic") {
             await Forma.camera.switchPerspective();
           }
 
-          if (token !== updateToken) return;
+          if (myUpdate !== updateId) return;
 
           await Forma.camera.move({
-            position,
+            position: newPosition,
             target,
             transitionTimeMs: 0
           });
         } catch (err) {
-          console.error("Failed to update axonometric view:", err);
-        } finally {
-          isUpdating = false;
+          console.error("Failed to update camera:", err);
         }
       }
 
+      function scheduleLiveUpdate(angleDeg) {
+        angleValue.textContent = angleDeg;
+
+        if (updateTimer) {
+          clearTimeout(updateTimer);
+        }
+
+        updateTimer = setTimeout(() => {
+          applyAngle(angleDeg);
+        }, DRAG_DELAY_MS);
+      }
+
       angleInput.addEventListener("input", () => {
-        const value = Number(angleInput.value);
-        angleValue.textContent = value;
-        applyAngle(value);
+        scheduleLiveUpdate(Number(angleInput.value));
       });
 
-      // Initialize immediately.
+      angleInput.addEventListener("change", () => {
+        if (updateTimer) {
+          clearTimeout(updateTimer);
+          updateTimer = null;
+        }
+        applyAngle(Number(angleInput.value));
+      });
+
+      angleInput.addEventListener("pointerup", () => {
+        if (updateTimer) {
+          clearTimeout(updateTimer);
+          updateTimer = null;
+        }
+        applyAngle(Number(angleInput.value));
+      });
+
+      // Initialize once.
       applyAngle(Number(angleInput.value));
     </script>
   </body>
