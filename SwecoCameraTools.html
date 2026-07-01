@@ -7,7 +7,7 @@
     <style>
       :root {
         color-scheme: light dark;
-        font-family: Sweco Sans, sans-serif;
+        font-family: system-ui, sans-serif;
       }
 
       body {
@@ -19,7 +19,7 @@
       .panel {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
       }
 
       label {
@@ -28,47 +28,95 @@
         gap: 6px;
       }
 
-      input, button {
+      input,
+      button {
         font: inherit;
-        padding: 8px 10px;
+      }
+
+      input[type="range"] {
+        width: 100%;
+      }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
       }
 
       button {
+        padding: 8px 10px;
         cursor: pointer;
+      }
+
+      .value {
+        min-width: 3ch;
+        text-align: right;
       }
 
       .hint {
         opacity: 0.8;
+        font-size: 12px;
       }
     </style>
   </head>
   <body>
     <div class="panel">
       <label>
-        Angle from ground (degrees)
-        <input id="angle" type="number" value="30" min="1" max="89" />
+        Angle from ground
+        <div class="row">
+          <input id="angle" type="range" min="0" max="90" value="30" />
+          <div class="value"><span id="angleValue">30</span>°</div>
+        </div>
       </label>
 
       <button id="apply">Set Axonometric View</button>
 
       <div class="hint">
-        Forma doesn't allow axonometric or orthographic views by default, but the funcionality is there, just hidden.<br><br>
-        After setting up a view, it can be saved through the standard view management UI and it will be saved correctly.<br><br>
-        Use angle 0 to set up an elevation / section.
+        Centers on the current camera target and keeps the current viewing direction.
       </div>
     </div>
 
     <script type="module">
       import { Forma } from "https://esm.sh/forma-embedded-view-sdk/auto";
-
       window.Forma = Forma;
 
       const angleInput = document.getElementById("angle");
+      const angleValue = document.getElementById("angleValue");
       const applyButton = document.getElementById("apply");
 
       function toRadians(deg) {
         return (deg * Math.PI) / 180;
       }
+
+      function normalize(v) {
+        const len = Math.hypot(v.x, v.y, v.z) || 1;
+        return { x: v.x / len, y: v.y / len, z: v.z / len };
+      }
+
+      function scale(v, s) {
+        return { x: v.x * s, y: v.y * s, z: v.z * s };
+      }
+
+      function add(a, b) {
+        return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+      }
+
+      function sub(a, b) {
+        return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+      }
+
+      function cross(a, b) {
+        return {
+          x: a.y * b.z - a.z * b.y,
+          y: a.z * b.x - a.x * b.z,
+          z: a.x * b.y - a.y * b.x
+        };
+      }
+
+      angleInput.addEventListener("input", () => {
+        angleValue.textContent = angleInput.value;
+      });
 
       applyButton.addEventListener("click", async () => {
         try {
@@ -77,17 +125,40 @@
 
           const cam = await Forma.camera.getCurrent();
           const target = cam.target;
+          const currentPosition = cam.position;
 
-          const distance = 500;
+          const viewDir = normalize(sub(target, currentPosition));
 
-          const horizontal = distance * Math.cos(angleRad);
-          const vertical = distance * Math.sin(angleRad);
+          // Choose a world up vector.
+          const worldUp = { x: 0, y: 0, z: 1 };
 
-          const position = {
-            x: target.x + horizontal,
-            y: target.y + horizontal,
-            z: target.z + vertical
-          };
+          // Build a sideways axis from the current viewing direction.
+          let right = cross(viewDir, worldUp);
+          const rightLen = Math.hypot(right.x, right.y, right.z);
+
+          // Fallback if the current view is close to vertical.
+          if (rightLen < 1e-6) {
+            right = { x: 1, y: 0, z: 0 };
+          } else {
+            right = normalize(right);
+          }
+
+          // Keep the current azimuth/orientation, but adjust the elevation angle.
+          const horizontal = Math.cos(angleRad);
+          const vertical = Math.sin(angleRad);
+
+          // Use the current distance from camera to target so framing stays familiar.
+          const distance = Math.hypot(
+            currentPosition.x - target.x,
+            currentPosition.y - target.y,
+            currentPosition.z - target.z
+          ) || 1;
+
+          const heightOffset = scale(worldUp, distance * vertical);
+          const horizontalOffset = scale(right, distance * horizontal);
+
+          // Camera remains on the same side of the target as the current orientation.
+          const position = add(target, add(horizontalOffset, heightOffset));
 
           if (cam.type !== "orthographic") {
             await Forma.camera.switchPerspective();
@@ -96,7 +167,7 @@
           await Forma.camera.move({
             position,
             target,
-            transitionTimeMs: 700
+            transitionTimeMs: 0
           });
         } catch (err) {
           console.error("Failed to set axonometric view:", err);
