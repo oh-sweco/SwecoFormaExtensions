@@ -106,6 +106,12 @@
     <div class="panel">
       <div class="section">
         <h2>Axonometric View</h2>
+
+        <label class="row" style="flex-direction: row;">
+          <input id="axonometryEnabled" type="checkbox" />
+          <span>Enable axonometry auto-update</span>
+        </label>
+
         <label>
           Angle from ground
           <div class="row">
@@ -113,13 +119,15 @@
             <div class="value"><span id="angleValue">30</span>°</div>
           </div>
         </label>
+
         <div class="hint">
-          Updates live while dragging, then applies one final instant update on release.
+          When enabled, updates live while dragging, then applies one final instant update on release.
         </div>
       </div>
 
       <div class="section">
         <h2>Geometry Coloring</h2>
+
         <label class="row" style="flex-direction: row;">
           <input id="geometryEnabled" type="checkbox" />
           <span>Enable geometry coloring</span>
@@ -130,12 +138,15 @@
             <input id="geometryColor" type="color" value="#4f8cff" />
             <div id="geometryPreview" class="preview" style="background:#4f8cff"></div>
           </div>
-          <div class="hint">Applies a temporary render color to geometry while enabled.</div>
+          <div class="hint">
+            Colors the current selection using Forma.render.elementColors.set(...).
+          </div>
         </div>
       </div>
 
       <div class="section">
         <h2>Terrain Coloring</h2>
+
         <label class="row" style="flex-direction: row;">
           <input id="terrainEnabled" type="checkbox" />
           <span>Enable terrain coloring</span>
@@ -146,7 +157,9 @@
             <input id="terrainColor" type="color" value="#4fe08c" />
             <div id="terrainPreview" class="preview" style="background:#4fe08c"></div>
           </div>
-          <div class="hint">Applies a temporary terrain color while enabled.</div>
+          <div class="hint">
+            Applies a temporary terrain color while enabled.
+          </div>
         </div>
       </div>
     </div>
@@ -157,6 +170,7 @@
 
       const angleInput = document.getElementById("angle");
       const angleValue = document.getElementById("angleValue");
+      const axonometryEnabled = document.getElementById("axonometryEnabled");
 
       const geometryEnabled = document.getElementById("geometryEnabled");
       const geometryControls = document.getElementById("geometryControls");
@@ -170,8 +184,12 @@
 
       let updateTimer = null;
       let updateId = 0;
-
       const DRAG_DELAY_MS = 80;
+
+      let selectedPaths = [];
+      let selectionUnsubscribe = null;
+
+      let terrainColorHandle = null;
 
       function toRadians(deg) {
         return (deg * Math.PI) / 180;
@@ -193,11 +211,15 @@
       function scheduleLiveUpdate(angleDeg) {
         angleValue.textContent = angleDeg;
 
+        if (!axonometryEnabled.checked) return;
+
         if (updateTimer) clearTimeout(updateTimer);
         updateTimer = setTimeout(() => applyAngle(angleDeg), DRAG_DELAY_MS);
       }
 
       async function applyAngle(angleDeg) {
+        if (!axonometryEnabled.checked) return;
+
         const myUpdate = ++updateId;
 
         try {
@@ -207,9 +229,8 @@
 
           const dx = pos.x - target.x;
           const dy = pos.y - target.y;
-          const dz = pos.z - target.z;
 
-          const distance = Math.hypot(dx, dy, dz) || 1;
+          const distance = Math.hypot(dx, dy, pos.z - target.z) || 1;
           const azimuth = Math.atan2(dy, dx);
 
           const elevation = toRadians(angleDeg);
@@ -240,33 +261,71 @@
         }
       }
 
-      // ---- Geometry coloring ----
-      let geometryColorHandle = null;
+      async function commitAxonometry(angleDeg) {
+        if (updateTimer) {
+          clearTimeout(updateTimer);
+          updateTimer = null;
+        }
+        await applyAngle(angleDeg);
+      }
 
       async function applyGeometryColor() {
-        const color = geometryColor.value;
-
-        setPreview(geometryPreview, color);
-
+        setPreview(geometryPreview, geometryColor.value);
         if (!geometryEnabled.checked) return;
 
-        // NOTE:
-        // This assumes the Render API exposes a geometry coloring method that accepts color.
-        // If your exact SDK method name differs, I can adapt it to the docs you have.
-        if (geometryColorHandle) {
-          await geometryColorHandle.remove?.();
-          geometryColorHandle = null;
-        }
+        try {
+          if (!selectedPaths.length) {
+            await Forma.render.elementColors.clearAll();
+            return;
+          }
 
-        geometryColorHandle = await Forma.render.geometry.color({
-          color
-        });
+          await Forma.render.elementColors.clearAll();
+
+          const pathsToColor = new Map();
+          for (const path of selectedPaths) {
+            pathsToColor.set(path, geometryColor.value);
+          }
+
+          await Forma.render.elementColors.set({ pathsToColor });
+        } catch (err) {
+          console.error("Failed to apply geometry color:", err);
+        }
       }
 
       async function clearGeometryColor() {
-        if (geometryColorHandle) {
-          await geometryColorHandle.remove?.();
-          geometryColorHandle = null;
+        try {
+          await Forma.render.elementColors.clearAll();
+        } catch (err) {
+          console.error("Failed to clear geometry color:", err);
+        }
+      }
+
+      async function applyTerrainColor() {
+        setPreview(terrainPreview, terrainColor.value);
+        if (!terrainEnabled.checked) return;
+
+        try {
+          if (terrainColorHandle) {
+            await terrainColorHandle.remove?.();
+            terrainColorHandle = null;
+          }
+
+          terrainColorHandle = await Forma.terrain.groundTexture.add({
+            color: terrainColor.value
+          });
+        } catch (err) {
+          console.error("Failed to apply terrain color:", err);
+        }
+      }
+
+      async function clearTerrainColor() {
+        try {
+          if (terrainColorHandle) {
+            await terrainColorHandle.remove?.();
+            terrainColorHandle = null;
+          }
+        } catch (err) {
+          console.error("Failed to clear terrain color:", err);
         }
       }
 
@@ -286,36 +345,6 @@
         }
       });
 
-      // ---- Terrain coloring ----
-      let terrainColorHandle = null;
-
-      async function applyTerrainColor() {
-        const color = terrainColor.value;
-
-        setPreview(terrainPreview, color);
-
-        if (!terrainEnabled.checked) return;
-
-        if (terrainColorHandle) {
-          await terrainColorHandle.remove?.();
-          terrainColorHandle = null;
-        }
-
-        // NOTE:
-        // This assumes the Terrain API exposes a color/paint method for the terrain object.
-        // If the exact method name differs in your SDK version, I can adjust it.
-        terrainColorHandle = await Forma.terrain.groundTexture.add({
-          color
-        });
-      }
-
-      async function clearTerrainColor() {
-        if (terrainColorHandle) {
-          await terrainColorHandle.remove?.();
-          terrainColorHandle = null;
-        }
-      }
-
       terrainEnabled.addEventListener("change", async () => {
         toggleControls(terrainEnabled.checked, terrainControls);
         if (terrainEnabled.checked) {
@@ -332,33 +361,33 @@
         }
       });
 
-      // Live camera angle behavior
+      // Subscribe to selection so geometry coloring follows current selection.
+      selectionUnsubscribe = Forma.selection.subscribe(async ({ paths }) => {
+        selectedPaths = paths ?? [];
+        if (geometryEnabled.checked) {
+          await applyGeometryColor();
+        }
+      });
+
+      // Axonometry only updates when enabled.
       angleInput.addEventListener("input", () => {
         scheduleLiveUpdate(Number(angleInput.value));
       });
 
       angleInput.addEventListener("change", () => {
-        if (updateTimer) {
-          clearTimeout(updateTimer);
-          updateTimer = null;
-        }
-        applyAngle(Number(angleInput.value));
+        commitAxonometry(Number(angleInput.value));
       });
 
       angleInput.addEventListener("pointerup", () => {
-        if (updateTimer) {
-          clearTimeout(updateTimer);
-          updateTimer = null;
-        }
-        applyAngle(Number(angleInput.value));
+        commitAxonometry(Number(angleInput.value));
       });
 
-      // Initialize UI
+      // Initialize UI.
       setPreview(geometryPreview, geometryColor.value);
       setPreview(terrainPreview, terrainColor.value);
       toggleControls(false, geometryControls);
       toggleControls(false, terrainControls);
-      applyAngle(Number(angleInput.value));
+      angleValue.textContent = angleInput.value;
     </script>
   </body>
 </html>
