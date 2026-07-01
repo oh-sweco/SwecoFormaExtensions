@@ -28,11 +28,6 @@
         gap: 6px;
       }
 
-      input,
-      button {
-        font: inherit;
-      }
-
       input[type="range"] {
         width: 100%;
       }
@@ -42,11 +37,6 @@
         justify-content: space-between;
         align-items: center;
         gap: 12px;
-      }
-
-      button {
-        padding: 8px 10px;
-        cursor: pointer;
       }
 
       .value {
@@ -70,10 +60,8 @@
         </div>
       </label>
 
-      <button id="apply">Set Axonometric View</button>
-
       <div class="hint">
-        Centers on the current camera target and keeps the current viewing direction.
+        Updates live. Keeps the current camera orientation and centers on the current target.
       </div>
     </div>
 
@@ -83,7 +71,9 @@
 
       const angleInput = document.getElementById("angle");
       const angleValue = document.getElementById("angleValue");
-      const applyButton = document.getElementById("apply");
+
+      let updateToken = 0;
+      let isUpdating = false;
 
       function toRadians(deg) {
         return (deg * Math.PI) / 180;
@@ -114,55 +104,64 @@
         };
       }
 
-      angleInput.addEventListener("input", () => {
-        angleValue.textContent = angleInput.value;
-      });
+      async function applyAngle(angleDeg) {
+        const token = ++updateToken;
+        if (isUpdating) return;
+        isUpdating = true;
 
-      applyButton.addEventListener("click", async () => {
         try {
-          const angleDeg = Number(angleInput.value);
           const angleRad = toRadians(angleDeg);
-
           const cam = await Forma.camera.getCurrent();
+
+          // Center on current camera target.
           const target = cam.target;
           const currentPosition = cam.position;
 
+          // Current view direction.
           const viewDir = normalize(sub(target, currentPosition));
 
-          // Choose a world up vector.
+          // Use world-up for elevation, but preserve current azimuth by using the current
+          // horizontal projection of the view direction.
           const worldUp = { x: 0, y: 0, z: 1 };
 
-          // Build a sideways axis from the current viewing direction.
-          let right = cross(viewDir, worldUp);
-          const rightLen = Math.hypot(right.x, right.y, right.z);
+          const currentHorizontal = {
+            x: viewDir.x,
+            y: viewDir.y,
+            z: 0
+          };
 
-          // Fallback if the current view is close to vertical.
-          if (rightLen < 1e-6) {
-            right = { x: 1, y: 0, z: 0 };
-          } else {
-            right = normalize(right);
+          let horizontalDir = normalize(currentHorizontal);
+
+          // If the current view is close to vertical, fall back to a stable direction
+          // derived from the camera's right vector.
+          if (Math.hypot(horizontalDir.x, horizontalDir.y, horizontalDir.z) < 1e-6) {
+            let right = cross(viewDir, worldUp);
+            if (Math.hypot(right.x, right.y, right.z) < 1e-6) {
+              right = { x: 1, y: 0, z: 0 };
+            }
+            horizontalDir = normalize(right);
           }
 
-          // Keep the current azimuth/orientation, but adjust the elevation angle.
-          const horizontal = Math.cos(angleRad);
-          const vertical = Math.sin(angleRad);
+          const distance =
+            Math.hypot(
+              currentPosition.x - target.x,
+              currentPosition.y - target.y,
+              currentPosition.z - target.z
+            ) || 1;
 
-          // Use the current distance from camera to target so framing stays familiar.
-          const distance = Math.hypot(
-            currentPosition.x - target.x,
-            currentPosition.y - target.y,
-            currentPosition.z - target.z
-          ) || 1;
+          const horizontalMag = distance * Math.cos(angleRad);
+          const verticalMag = distance * Math.sin(angleRad);
 
-          const heightOffset = scale(worldUp, distance * vertical);
-          const horizontalOffset = scale(right, distance * horizontal);
+          const horizontalOffset = scale(horizontalDir, horizontalMag);
+          const verticalOffset = scale(worldUp, verticalMag);
 
-          // Camera remains on the same side of the target as the current orientation.
-          const position = add(target, add(horizontalOffset, heightOffset));
+          const position = add(target, add(horizontalOffset, verticalOffset));
 
           if (cam.type !== "orthographic") {
             await Forma.camera.switchPerspective();
           }
+
+          if (token !== updateToken) return;
 
           await Forma.camera.move({
             position,
@@ -170,10 +169,20 @@
             transitionTimeMs: 0
           });
         } catch (err) {
-          console.error("Failed to set axonometric view:", err);
-          alert("Could not set axonometric view. See console for details.");
+          console.error("Failed to update axonometric view:", err);
+        } finally {
+          isUpdating = false;
         }
+      }
+
+      angleInput.addEventListener("input", () => {
+        const value = Number(angleInput.value);
+        angleValue.textContent = value;
+        applyAngle(value);
       });
+
+      // Initialize immediately.
+      applyAngle(Number(angleInput.value));
     </script>
   </body>
 </html>
