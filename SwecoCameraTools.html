@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Axonometric View + Site Limit Coloring + Terrain Coloring</title>
+    <title>Axonometric View + Geometry Coloring + Terrain Coloring</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -101,17 +101,6 @@
         pointer-events: none;
       }
 
-      .button-row {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      button {
-        padding: 8px 12px;
-        cursor: pointer;
-      }
-
       .status {
         min-height: 20px;
         font-size: 13px;
@@ -123,6 +112,7 @@
     <div class="panel">
       <div class="section">
         <h2>Axonometric View</h2>
+
         <label class="row" style="flex-direction: row;">
           <input id="axonometryEnabled" type="checkbox" />
           <span>Enable axonometry auto-update</span>
@@ -141,43 +131,53 @@
 
       <div class="section">
         <h2>Geometry Coloring</h2>
+
         <label class="row" style="flex-direction: row;">
-          <input id="geometryEnabled" type="checkbox" />
-          <span>Enable geometry coloring</span>
+          <input id="insideEnabled" type="checkbox" />
+          <span>Color inside site limit</span>
         </label>
 
-        <div id="geometryControls" class="color-controls disabled">
+        <div id="insideControls" class="color-controls disabled">
           <div class="color-picker-wrap">
             <input id="insideColor" type="color" value="#4f8cff" />
             <div id="insidePreview" class="preview" style="background:#4f8cff"></div>
             <span>Inside site limit</span>
           </div>
+          <div class="hint">Uses the actual Forma categories and site-limit polygons.</div>
+        </div>
 
+        <label class="row" style="flex-direction: row;">
+          <input id="outsideEnabled" type="checkbox" />
+          <span>Color outside site limit</span>
+        </label>
+
+        <div id="outsideControls" class="color-controls disabled">
           <div class="color-picker-wrap">
             <input id="outsideColor" type="color" value="#d95f5f" />
             <div id="outsidePreview" class="preview" style="background:#d95f5f"></div>
             <span>Outside site limit</span>
           </div>
+          <div class="hint">Includes building, tree, road, rail, boundary, zone, constraints, vegetation, and generics.</div>
+        </div>
 
+        <label class="row" style="flex-direction: row;">
+          <input id="selectionEnabled" type="checkbox" />
+          <span>Color selected geometry</span>
+        </label>
+
+        <div id="selectionControls" class="color-controls disabled">
           <div class="color-picker-wrap">
             <input id="selectionColor" type="color" value="#00ff00" />
             <div id="selectionPreview" class="preview" style="background:#00ff00"></div>
             <span>Selection override</span>
           </div>
-
-          <div class="button-row">
-            <button id="applyGeometryBtn">Apply geometry colors</button>
-            <button id="clearGeometryBtn">Clear geometry colors</button>
-          </div>
-
-          <div class="hint">
-            Geometry is colored in 3 layers: inside site limit, outside site limit, then selection on top.
-          </div>
+          <div class="hint">Selection is applied last and overrides the other two geometry colors.</div>
         </div>
       </div>
 
       <div class="section">
         <h2>Terrain Coloring</h2>
+
         <label class="row" style="flex-direction: row;">
           <input id="terrainEnabled" type="checkbox" />
           <span>Enable terrain coloring</span>
@@ -189,15 +189,7 @@
             <div id="terrainPreview" class="preview" style="background:#4fe08c"></div>
             <span>Terrain color</span>
           </div>
-
-          <div class="button-row">
-            <button id="applyTerrainBtn">Apply terrain color</button>
-            <button id="clearTerrainBtn">Clear terrain color</button>
-          </div>
-
-          <div class="hint">
-            Uses terrain.getBbox() + a full-cover ground texture.
-          </div>
+          <div class="hint">Uses terrain.getBbox() + a ground texture covering the full terrain bounds.</div>
         </div>
       </div>
 
@@ -214,39 +206,56 @@
       const angleValue = document.getElementById("angleValue");
       const axonometryEnabled = document.getElementById("axonometryEnabled");
 
-      const geometryEnabled = document.getElementById("geometryEnabled");
-      const geometryControls = document.getElementById("geometryControls");
+      const insideEnabled = document.getElementById("insideEnabled");
+      const outsideEnabled = document.getElementById("outsideEnabled");
+      const selectionEnabled = document.getElementById("selectionEnabled");
+
+      const insideControls = document.getElementById("insideControls");
+      const outsideControls = document.getElementById("outsideControls");
+      const selectionControls = document.getElementById("selectionControls");
+
       const insideColor = document.getElementById("insideColor");
       const outsideColor = document.getElementById("outsideColor");
       const selectionColor = document.getElementById("selectionColor");
+
       const insidePreview = document.getElementById("insidePreview");
       const outsidePreview = document.getElementById("outsidePreview");
       const selectionPreview = document.getElementById("selectionPreview");
-      const applyGeometryBtn = document.getElementById("applyGeometryBtn");
-      const clearGeometryBtn = document.getElementById("clearGeometryBtn");
 
       const terrainEnabled = document.getElementById("terrainEnabled");
       const terrainControls = document.getElementById("terrainControls");
       const terrainColor = document.getElementById("terrainColor");
       const terrainPreview = document.getElementById("terrainPreview");
-      const applyTerrainBtn = document.getElementById("applyTerrainBtn");
-      const clearTerrainBtn = document.getElementById("clearTerrainBtn");
 
       const TERRAIN_TEXTURE_NAME = "terrainColor";
+      const DRAG_DELAY_MS = 80;
 
       let updateTimer = null;
       let updateId = 0;
       let selectionPaths = [];
-      let terrainTextureExists = false;
 
-      const DRAG_DELAY_MS = 80;
+      const GEOMETRY_CATEGORIES = [
+        "constraints",
+        "vegetation",
+        "site_limit",
+        "zone",
+        "building",
+        "tree_area",
+        "tree_line",
+        "road",
+        "rails",
+        "property_boundary",
+        "generic25D",
+        "generic2D",
+        "generic2DLine"
+      ];
 
       function setStatus(msg) {
         statusEl.textContent = msg || "";
       }
 
-      function toggleControls(enabled, controlsEl) {
-        controlsEl.classList.toggle("disabled", !enabled);
+      function toggleControls(enabled, el) {
+        el.classList.toggle("disabled", !enabled);
       }
 
       function isValidHexColor(value) {
@@ -307,7 +316,7 @@
             transitionTimeMs: 0
           });
         } catch (err) {
-          console.error("Failed to update camera:", err);
+          console.error(err);
           setStatus(`Camera error: ${err.message}`);
         }
       }
@@ -328,31 +337,19 @@
         await applyAngle(angleDeg);
       }
 
-      async function getPathsByAnyCategory(categories) {
-        for (const category of categories) {
-          try {
-            const paths = await Forma.geometry.getPathsByCategory({ category });
-            if (paths && paths.length > 0) {
-              return { category, paths };
-            }
-          } catch {}
+      async function getPathsByCategorySafe(category) {
+        try {
+          return await Forma.geometry.getPathsByCategory({ category });
+        } catch {
+          return [];
         }
-        return { category: null, paths: [] };
       }
 
       async function getSiteLimitPolygons() {
-        const siteLimitSearch = await getPathsByAnyCategory([
-          "site_limit",
-          "site-limit",
-          "sitelimit",
-          "site limit"
-        ]);
-
-        if (!siteLimitSearch.paths.length) return [];
-
+        const paths = await getPathsByCategorySafe("site_limit");
         const polygons = [];
 
-        for (const path of siteLimitSearch.paths) {
+        for (const path of paths || []) {
           try {
             const footprint = await Forma.geometry.getFootprint({ path });
             if (!footprint) continue;
@@ -374,42 +371,32 @@
         return polygons;
       }
 
-      async function getAllCandidateColorablePaths() {
-        const categoryGroups = [
-          ["building", "buildings"],
-          ["generic_volume", "generic volumes", "generic-volumes"],
-          ["sketch_building", "sketch building", "sketch-buildings"],
-          ["road", "roads"],
-          ["tree", "trees"],
-          ["site", "sites"],
-          ["terrain"]
-        ];
-
+      async function getAllCandidatePaths() {
         const all = [];
         const seen = new Set();
 
-        for (const group of categoryGroups) {
-          for (const category of group) {
-            try {
-              const paths = await Forma.geometry.getPathsByCategory({ category });
-              for (const p of paths || []) {
-                if (!seen.has(p)) {
-                  seen.add(p);
-                  all.push(p);
-                }
-              }
-            } catch {}
+        for (const category of GEOMETRY_CATEGORIES) {
+          const paths = await getPathsByCategorySafe(category);
+          for (const p of paths || []) {
+            if (!seen.has(p)) {
+              seen.add(p);
+              all.push(p);
+            }
           }
         }
 
         return all;
       }
 
-      async function getColorablePathsInsideAndOutsideSiteLimit() {
-        const siteLimitPolygons = await getSiteLimitPolygons();
-        const allPaths = await getAllCandidateColorablePaths();
+      async function getInsideOutsidePaths() {
+        const [siteLimitPolygons, allPaths] = await Promise.all([
+          getSiteLimitPolygons(),
+          getAllCandidatePaths()
+        ]);
 
-        if (!siteLimitPolygons.length) return { inside: [], outside: allPaths };
+        if (!siteLimitPolygons.length) {
+          return { inside: [], outside: allPaths };
+        }
 
         const inside = await Forma.geometry.getPathsInsidePolygons({
           polygons: siteLimitPolygons
@@ -421,44 +408,35 @@
         return { inside, outside };
       }
 
-      async function applyGeometryColors() {
-        if (!geometryEnabled.checked) return;
-
+      async function recolorGeometry() {
         try {
-          if (
-            !isValidHexColor(insideColor.value) ||
-            !isValidHexColor(outsideColor.value) ||
-            !isValidHexColor(selectionColor.value)
-          ) {
-            setStatus("Invalid geometry color value.");
-            return;
-          }
-
-          const { inside, outside } = await getColorablePathsInsideAndOutsideSiteLimit();
-
           await Forma.render.elementColors.clearAll();
 
+          const { inside, outside } = await getInsideOutsidePaths();
           const pathsToColor = new Map();
 
-          for (const path of outside) {
-            pathsToColor.set(path, outsideColor.value);
+          if (outsideEnabled.checked && isValidHexColor(outsideColor.value)) {
+            for (const path of outside) pathsToColor.set(path, outsideColor.value);
           }
 
-          for (const path of inside) {
-            pathsToColor.set(path, insideColor.value);
+          if (insideEnabled.checked && isValidHexColor(insideColor.value)) {
+            for (const path of inside) pathsToColor.set(path, insideColor.value);
           }
 
-          for (const path of selectionPaths) {
-            pathsToColor.set(path, selectionColor.value);
+          if (selectionEnabled.checked && isValidHexColor(selectionColor.value)) {
+            for (const path of selectionPaths) pathsToColor.set(path, selectionColor.value);
           }
 
-          await Forma.render.elementColors.set({ pathsToColor });
-
-          setStatus(
-            `Applied geometry colors. Inside: ${inside.length}, outside: ${outside.length}, selection: ${selectionPaths.length}.`
-          );
+          if (pathsToColor.size > 0) {
+            await Forma.render.elementColors.set({ pathsToColor });
+            setStatus(
+              `Applied geometry colors. Inside: ${inside.length}, outside: ${outside.length}, selection: ${selectionPaths.length}.`
+            );
+          } else {
+            setStatus("Geometry coloring is enabled, but no colors are active.");
+          }
         } catch (err) {
-          console.error("Failed to apply geometry colors:", err);
+          console.error("Failed to recolor geometry:", err);
           setStatus(`Geometry color error: ${err.message}`);
         }
       }
@@ -473,46 +451,45 @@
         }
       }
 
-      async function createSolidTerrainTexture(color) {
-        const bbox = await Forma.terrain.getBbox();
-
-        const minX = bbox?.min?.x ?? -50;
-        const maxX = bbox?.max?.x ?? 50;
-        const minY = bbox?.min?.y ?? -50;
-        const maxY = bbox?.max?.y ?? 50;
-        const maxZ = bbox?.max?.z ?? 0;
-
-        const width = Math.max(1, maxX - minX);
-        const height = Math.max(1, maxY - minY);
-        const centerX = (minX + maxX) / 2;
-        const centerY = (minY + maxY) / 2;
-
-        const canvas = document.createElement("canvas");
-        canvas.width = 1024;
-        canvas.height = 1024;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) throw new Error("Could not get canvas 2D context.");
-
-        ctx.fillStyle = color;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        await Forma.terrain.groundTexture.add({
-          name: TERRAIN_TEXTURE_NAME,
-          canvas,
-          position: { x: centerX, y: centerY, z: maxZ + 1 },
-          scale: { x: width / 100, y: height / 100 }
-        });
-
-        terrainTextureExists = true;
-      }
-
       async function applyTerrainColor() {
-        if (!terrainEnabled.checked) return;
-
         try {
           await Forma.terrain.groundTexture.remove({ name: TERRAIN_TEXTURE_NAME }).catch(() => {});
-          await createSolidTerrainTexture(terrainColor.value);
+
+          if (!terrainEnabled.checked) {
+            setStatus("Terrain coloring is disabled.");
+            return;
+          }
+
+          const bbox = await Forma.terrain.getBbox();
+
+          const minX = bbox?.min?.x ?? -50;
+          const maxX = bbox?.max?.x ?? 50;
+          const minY = bbox?.min?.y ?? -50;
+          const maxY = bbox?.max?.y ?? 50;
+          const maxZ = bbox?.max?.z ?? 0;
+
+          const width = Math.max(1, maxX - minX);
+          const height = Math.max(1, maxY - minY);
+          const centerX = (minX + maxX) / 2;
+          const centerY = (minY + maxY) / 2;
+
+          const canvas = document.createElement("canvas");
+          canvas.width = 1024;
+          canvas.height = 1024;
+
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("Could not get canvas 2D context.");
+
+          ctx.fillStyle = terrainColor.value;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          await Forma.terrain.groundTexture.add({
+            name: TERRAIN_TEXTURE_NAME,
+            canvas,
+            position: { x: centerX, y: centerY, z: maxZ + 1 },
+            scale: { x: width / 100, y: height / 100 }
+          });
+
           setStatus("Applied terrain color.");
         } catch (err) {
           console.error("Failed to apply terrain color:", err);
@@ -523,7 +500,6 @@
       async function clearTerrainColor() {
         try {
           await Forma.terrain.groundTexture.remove({ name: TERRAIN_TEXTURE_NAME }).catch(() => {});
-          terrainTextureExists = false;
           setStatus("Cleared terrain color.");
         } catch (err) {
           console.error("Failed to clear terrain color:", err);
@@ -531,33 +507,47 @@
         }
       }
 
-      geometryEnabled.addEventListener("change", async () => {
-        toggleControls(geometryEnabled.checked, geometryControls);
-        if (geometryEnabled.checked) await applyGeometryColors();
-        else await clearGeometryColors();
+      function scheduleGeometryRecolor() {
+        if (!insideEnabled.checked && !outsideEnabled.checked && !selectionEnabled.checked) {
+          clearGeometryColors();
+          return;
+        }
+        recolorGeometry();
+      }
+
+      insideEnabled.addEventListener("change", async () => {
+        toggleControls(insideEnabled.checked, insideControls);
+        await scheduleGeometryRecolor();
       });
 
-      applyGeometryBtn.addEventListener("click", applyGeometryColors);
-      clearGeometryBtn.addEventListener("click", clearGeometryColors);
+      outsideEnabled.addEventListener("change", async () => {
+        toggleControls(outsideEnabled.checked, outsideControls);
+        await scheduleGeometryRecolor();
+      });
+
+      selectionEnabled.addEventListener("change", async () => {
+        toggleControls(selectionEnabled.checked, selectionControls);
+        await scheduleGeometryRecolor();
+      });
 
       insideColor.addEventListener("input", () => {
         setPreview(insidePreview, insideColor.value);
-        if (geometryEnabled.checked) applyGeometryColors();
+        if (insideEnabled.checked) recolorGeometry();
       });
 
       outsideColor.addEventListener("input", () => {
         setPreview(outsidePreview, outsideColor.value);
-        if (geometryEnabled.checked) applyGeometryColors();
+        if (outsideEnabled.checked) recolorGeometry();
       });
 
       selectionColor.addEventListener("input", () => {
         setPreview(selectionPreview, selectionColor.value);
-        if (geometryEnabled.checked) applyGeometryColors();
+        if (selectionEnabled.checked) recolorGeometry();
       });
 
       Forma.selection.subscribe(({ paths }) => {
         selectionPaths = paths ?? [];
-        if (geometryEnabled.checked) applyGeometryColors();
+        if (selectionEnabled.checked) recolorGeometry();
       });
 
       terrainEnabled.addEventListener("change", async () => {
@@ -566,12 +556,13 @@
         else await clearTerrainColor();
       });
 
-      applyTerrainBtn.addEventListener("click", applyTerrainColor);
-      clearTerrainBtn.addEventListener("click", clearTerrainColor);
-
       terrainColor.addEventListener("input", () => {
         setPreview(terrainPreview, terrainColor.value);
         if (terrainEnabled.checked) applyTerrainColor();
+      });
+
+      axonometryEnabled.addEventListener("change", () => {
+        if (axonometryEnabled.checked) applyAngle(Number(angleInput.value));
       });
 
       angleInput.addEventListener("input", () => scheduleLiveUpdate(Number(angleInput.value)));
@@ -583,7 +574,9 @@
       setPreview(selectionPreview, selectionColor.value);
       setPreview(terrainPreview, terrainColor.value);
 
-      toggleControls(false, geometryControls);
+      toggleControls(false, insideControls);
+      toggleControls(false, outsideControls);
+      toggleControls(false, selectionControls);
       toggleControls(false, terrainControls);
 
       angleValue.textContent = angleInput.value;
