@@ -161,6 +161,7 @@
             <div id="insidePreview" class="preview" style="background:#4f8cff"></div>
             <span>Inside site limit</span>
           </div>
+          <div class="hint">Uses site-limit polygons and actual geometry paths.</div>
         </div>
 
         <label class="row" style="flex-direction: row;">
@@ -170,10 +171,11 @@
 
         <div id="outsideControls" class="color-controls disabled">
           <div class="color-picker-wrap">
-            <input id="outsideColor" type="color" value="#d95f5f" />
-            <div id="outsidePreview" class="preview" style="background:#d95f5f"></div>
+            <input id="outsideColor" type="color" value="#dddddd" />
+            <div id="outsidePreview" class="preview" style="background:#dddddd"></div>
             <span>Outside site limit</span>
           </div>
+          <div class="hint">Anything not positively identified as inside is treated as outside.</div>
         </div>
 
         <label class="row" style="flex-direction: row;">
@@ -183,16 +185,12 @@
 
         <div id="selectionControls" class="color-controls disabled">
           <div class="color-picker-wrap">
-            <input id="selectionColor" type="color" value="#00ff00" />
-            <div id="selectionPreview" class="preview" style="background:#00ff00"></div>
+            <input id="selectionColor" type="color" value="#00cccc" />
+            <div id="selectionPreview" class="preview" style="background:#00cccc"></div>
             <span>Selection override</span>
           </div>
+          <div class="hint">Selection is applied last and overrides the other two geometry colors.</div>
         </div>
-
-        <div class="btn-row">
-          <button id="debugGeometryBtn" type="button">Run debug logs</button>
-        </div>
-      </div>
 
       <div class="section">
         <h2>Terrain Coloring</h2>
@@ -204,10 +202,11 @@
 
         <div id="terrainControls" class="color-controls disabled">
           <div class="color-picker-wrap">
-            <input id="terrainColor" type="color" value="#4fe08c" />
-            <div id="terrainPreview" class="preview" style="background:#4fe08c"></div>
+            <input id="terrainColor" type="color" value="#ffffff" />
+            <div id="terrainPreview" class="preview" style="background:#ffffff"></div>
             <span>Terrain color</span>
           </div>
+          <div class="hint">Uses terrain.getBbox() + a ground texture covering the full terrain bounds.</div>
         </div>
       </div>
 
@@ -245,7 +244,7 @@
       const terrainColor = document.getElementById("terrainColor");
       const terrainPreview = document.getElementById("terrainPreview");
 
-      const debugGeometryBtn = document.getElementById("debugGeometryBtn");
+      const debugSelectionBtn = document.getElementById("debugSelectionBtn");
 
       const TERRAIN_TEXTURE_NAME = "terrainColor";
       const DRAG_DELAY_MS = 80;
@@ -253,6 +252,22 @@
       let updateTimer = null;
       let updateId = 0;
       let selectionPaths = [];
+
+      const GEOMETRY_CATEGORIES = [
+        "constraints",
+        "vegetation",
+        "site_limit",
+        "zone",
+        "building",
+        "tree_area",
+        "tree_line",
+        "road",
+        "rails",
+        "property_boundary",
+        "generic25D",
+        "generic2D",
+        "generic2DLine"
+      ];
 
       function setStatus(msg) {
         statusEl.textContent = msg || "";
@@ -291,8 +306,9 @@
 
           const dx = position.x - target.x;
           const dy = position.y - target.y;
+          const dz = position.z - target.z;
 
-          const distance = Math.hypot(dx, dy, position.z - target.z) || 100;
+          const distance = Math.hypot(dx, dy, dz) || 100;
           const azimuth = Math.atan2(dy, dx);
 
           const elevation = toRadians(angleDeg);
@@ -327,6 +343,7 @@
       function scheduleLiveUpdate(angleDeg) {
         angleValue.textContent = angleDeg;
         if (!axonometryEnabled.checked) return;
+
         if (updateTimer) clearTimeout(updateTimer);
         updateTimer = setTimeout(() => applyAngle(angleDeg), DRAG_DELAY_MS);
       }
@@ -339,8 +356,16 @@
         await applyAngle(angleDeg);
       }
 
+      async function getPathsByCategorySafe(category) {
+        try {
+          return await Forma.geometry.getPathsByCategory({ category });
+        } catch {
+          return [];
+        }
+      }
+
       async function getSiteLimitPolygons() {
-        const paths = await Forma.geometry.getPathsByCategory({ category: "site_limit" }).catch(() => []);
+        const paths = await getPathsByCategorySafe("site_limit");
         const polygons = [];
 
         for (const path of paths || []) {
@@ -358,137 +383,82 @@
               polygons.push(footprint.coordinates);
             }
           } catch (e) {
-            console.warn("Failed site-limit footprint for path:", path, e);
+            console.warn("Failed to read site limit footprint for path:", path, e);
           }
         }
 
         return polygons;
       }
 
-      function bboxToPolygon(bbox) {
-        const minX = bbox?.min?.x ?? -50;
-        const minY = bbox?.min?.y ?? -50;
-        const maxX = bbox?.max?.x ?? 50;
-        const maxY = bbox?.max?.y ?? 50;
+      async function getAllCandidatePaths() {
+        const all = [];
+        const seen = new Set();
 
-        return [[
-          [minX, minY],
-          [maxX, minY],
-          [maxX, maxY],
-          [minX, maxY]
-        ]];
+        for (const category of GEOMETRY_CATEGORIES) {
+          const paths = await getPathsByCategorySafe(category);
+          for (const p of paths || []) {
+            if (!seen.has(p)) {
+              seen.add(p);
+              all.push(p);
+            }
+          }
+        }
+
+        return all;
       }
 
-      async function getUniversePaths() {
-        const bbox = await Forma.terrain.getBbox();
-        const terrainPolygon = bboxToPolygon(bbox);
-        const paths = await Forma.geometry.getPathsInsidePolygons({ polygons: terrainPolygon }).catch(() => []);
-        return { bbox, terrainPolygon, paths };
-      }
-
-      async function getSelectionPaths() {
-        return await Forma.selection.getSelection().catch(() => []);
-      }
-
-      async function classifyGeometry() {
-        const { bbox, terrainPolygon, paths: allPaths } = await getUniversePaths();
-        const [siteLimitPolygons, selectedPaths] = await Promise.all([
+      async function getInsideOutsidePaths() {
+        const [siteLimitPolygons, allPaths] = await Promise.all([
           getSiteLimitPolygons(),
-          getSelectionPaths()
+          getAllCandidatePaths()
         ]);
 
-        const siteLimitPaths = siteLimitPolygons.length
-          ? await Forma.geometry.getPathsInsidePolygons({ polygons: siteLimitPolygons }).catch(() => [])
-          : [];
-
-        const allSet = new Set(allPaths);
-        const siteSet = new Set(siteLimitPaths);
-        const selectedSet = new Set(selectedPaths);
-
-        const insidePaths = allPaths.filter((p) => siteSet.has(p));
-        const outsidePaths = allPaths.filter((p) => !siteSet.has(p));
-
-        return {
-          bbox,
-          terrainPolygon,
-          allPaths,
-          siteLimitPolygons,
-          siteLimitPaths,
-          selectedPaths,
-          insidePaths,
-          outsidePaths,
-          allSet,
-          siteSet,
-          selectedSet
-        };
-      }
-
-      async function debugClassification() {
-        console.group("Forma geometry classification debug");
-        try {
-          const data = await classifyGeometry();
-
-          console.log("Terrain bbox:", data.bbox);
-          console.log("Terrain polygon:", data.terrainPolygon);
-          console.log("All paths count:", data.allPaths.length);
-          console.log("All paths:", data.allPaths);
-
-          console.log("Site-limit polygons:", data.siteLimitPolygons);
-          console.log("Site-limit paths count:", data.siteLimitPaths.length);
-          console.log("Site-limit paths:", data.siteLimitPaths);
-
-          console.log("Selected paths:", data.selectedPaths);
-          console.log("Inside paths:", data.insidePaths);
-          console.log("Outside paths:", data.outsidePaths);
-
-          console.log("Selected inside:", data.selectedPaths.filter((p) => data.siteSet.has(p)));
-          console.log("Selected outside:", data.selectedPaths.filter((p) => !data.siteSet.has(p)));
-        } catch (err) {
-          console.error("Classification debug failed:", err);
-        } finally {
-          console.groupEnd();
+        if (!allPaths.length) {
+          return { inside: [], outside: [] };
         }
+
+        if (!siteLimitPolygons.length) {
+          return { inside: [], outside: allPaths };
+        }
+
+        const inside = await Forma.geometry.getPathsInsidePolygons({
+          polygons: siteLimitPolygons
+        });
+        
+        const BigBox = [[[-1000,-1000],[-1000,1000],[1000,1000],[1000,-1000],[-1000,-1000]]];
+        const insideBigBox = await Forma.geometry.getPathsInsidePolygons({
+          polygons: BigBox
+        });
+
+        const insideSet = new Set(inside);
+        const outside = insideBigBox.filter((p) => !insideSet.has(p));
+
+        return { inside, outside };
       }
 
       async function recolorGeometry() {
         try {
-          const { allPaths, insidePaths, outsidePaths } = await classifyGeometry();
+          await Forma.render.elementColors.clearAll();
 
-          console.group("Forma recolor debug");
-          console.log("All paths count:", allPaths.length);
-          console.log("Inside paths count:", insidePaths.length);
-          console.log("Outside paths count:", outsidePaths.length);
-          console.log("Selection paths:", selectionPaths);
-
+          const { inside, outside } = await getInsideOutsidePaths();
           const pathsToColor = new Map();
 
           if (outsideEnabled.checked && isValidHexColor(outsideColor.value)) {
-            for (const path of outsidePaths) {
-              pathsToColor.set(path, outsideColor.value);
-            }
+            for (const path of outside) pathsToColor.set(path, outsideColor.value);
           }
 
           if (insideEnabled.checked && isValidHexColor(insideColor.value)) {
-            for (const path of insidePaths) {
-              pathsToColor.set(path, insideColor.value);
-            }
+            for (const path of inside) pathsToColor.set(path, insideColor.value);
           }
 
           if (selectionEnabled.checked && isValidHexColor(selectionColor.value)) {
-            for (const path of selectionPaths) {
-              pathsToColor.set(path, selectionColor.value);
-            }
+            for (const path of selectionPaths) pathsToColor.set(path, selectionColor.value);
           }
-
-          console.log("Final pathsToColor entries:", Array.from(pathsToColor.entries()));
-          console.groupEnd();
-
-          await Forma.render.elementColors.clearAll();
 
           if (pathsToColor.size > 0) {
             await Forma.render.elementColors.set({ pathsToColor });
             setStatus(
-              `Applied geometry colors. Inside: ${insidePaths.length}, outside: ${outsidePaths.length}, selection: ${selectionPaths.length}.`
+              `Applied geometry colors. Inside: ${inside.length}, outside: ${outside.length}, selection: ${selectionPaths.length}.`
             );
           } else {
             setStatus("Geometry coloring is enabled, but no colors are active.");
@@ -519,6 +489,7 @@
           }
 
           const bbox = await Forma.terrain.getBbox();
+
           const minX = bbox?.min?.x ?? -50;
           const maxX = bbox?.max?.x ?? 50;
           const minY = bbox?.min?.y ?? -50;
@@ -570,6 +541,28 @@
           return;
         }
         recolorGeometry();
+      }
+
+      async function debugSelectedCategory() {
+        try {
+          const selected = selectionPaths || [];
+          console.group("Selected geometry category debug");
+          console.log("Selected paths:", selected);
+
+          for (const category of GEOMETRY_CATEGORIES) {
+            const categoryPaths = await getPathsByCategorySafe(category);
+            const hits = selected.filter((p) => categoryPaths.includes(p));
+            if (hits.length > 0) {
+              console.log(`Category "${category}" contains selected paths:`, hits);
+            }
+          }
+
+          console.groupEnd();
+          setStatus("Wrote selected geometry category info to console.");
+        } catch (err) {
+          console.error("Failed to debug selected category:", err);
+          setStatus(`Debug error: ${err.message}`);
+        }
       }
 
       insideEnabled.addEventListener("change", async () => {
@@ -626,9 +619,7 @@
       angleInput.addEventListener("change", () => commitAxonometry(Number(angleInput.value)));
       angleInput.addEventListener("pointerup", () => commitAxonometry(Number(angleInput.value)));
 
-      debugGeometryBtn.addEventListener("click", async () => {
-        await debugClassification();
-      });
+      debugSelectionBtn.addEventListener("click", debugSelectedCategory);
 
       setPreview(insidePreview, insideColor.value);
       setPreview(outsidePreview, outsideColor.value);
