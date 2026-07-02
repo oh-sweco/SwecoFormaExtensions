@@ -327,7 +327,6 @@
       function scheduleLiveUpdate(angleDeg) {
         angleValue.textContent = angleDeg;
         if (!axonometryEnabled.checked) return;
-
         if (updateTimer) clearTimeout(updateTimer);
         updateTimer = setTimeout(() => applyAngle(angleDeg), DRAG_DELAY_MS);
       }
@@ -366,7 +365,7 @@
         return polygons;
       }
 
-      function terrainBboxToPolygon(bbox) {
+      function bboxToPolygon(bbox) {
         const minX = bbox?.min?.x ?? -50;
         const minY = bbox?.min?.y ?? -50;
         const maxX = bbox?.max?.x ?? 50;
@@ -380,11 +379,11 @@
         ]];
       }
 
-      async function getTerrainUniversePaths() {
+      async function getUniversePaths() {
         const bbox = await Forma.terrain.getBbox();
-        const polygons = terrainBboxToPolygon(bbox);
-        const paths = await Forma.geometry.getPathsInsidePolygons({ polygons }).catch(() => []);
-        return { bbox, polygons, paths };
+        const terrainPolygon = bboxToPolygon(bbox);
+        const paths = await Forma.geometry.getPathsInsidePolygons({ polygons: terrainPolygon }).catch(() => []);
+        return { bbox, terrainPolygon, paths };
       }
 
       async function getSelectionPaths() {
@@ -392,36 +391,35 @@
       }
 
       async function classifyGeometry() {
-        const [{ bbox, polygons: terrainPolygons, paths: terrainPaths }, siteLimitPolygons, selectedPaths] =
-          await Promise.all([
-            getTerrainUniversePaths(),
-            getSiteLimitPolygons(),
-            getSelectionPaths()
-          ]);
+        const { bbox, terrainPolygon, paths: allPaths } = await getUniversePaths();
+        const [siteLimitPolygons, selectedPaths] = await Promise.all([
+          getSiteLimitPolygons(),
+          getSelectionPaths()
+        ]);
 
         const siteLimitPaths = siteLimitPolygons.length
           ? await Forma.geometry.getPathsInsidePolygons({ polygons: siteLimitPolygons }).catch(() => [])
           : [];
 
-        const terrainSet = new Set(terrainPaths);
-        const siteLimitSet = new Set(siteLimitPaths);
-        const selectionSet = new Set(selectedPaths);
+        const allSet = new Set(allPaths);
+        const siteSet = new Set(siteLimitPaths);
+        const selectedSet = new Set(selectedPaths);
 
-        const insidePaths = terrainPaths.filter((p) => siteLimitSet.has(p));
-        const outsidePaths = terrainPaths.filter((p) => !siteLimitSet.has(p));
+        const insidePaths = allPaths.filter((p) => siteSet.has(p));
+        const outsidePaths = allPaths.filter((p) => !siteSet.has(p));
 
         return {
           bbox,
-          terrainPolygons,
-          terrainPaths,
+          terrainPolygon,
+          allPaths,
           siteLimitPolygons,
           siteLimitPaths,
           selectedPaths,
           insidePaths,
           outsidePaths,
-          terrainSet,
-          siteLimitSet,
-          selectionSet
+          allSet,
+          siteSet,
+          selectedSet
         };
       }
 
@@ -431,24 +429,20 @@
           const data = await classifyGeometry();
 
           console.log("Terrain bbox:", data.bbox);
-          console.log("Terrain polygon:", data.terrainPolygons);
-          console.log("Terrain paths count:", data.terrainPaths.length);
-          console.log("Terrain paths:", data.terrainPaths);
+          console.log("Terrain polygon:", data.terrainPolygon);
+          console.log("All paths count:", data.allPaths.length);
+          console.log("All paths:", data.allPaths);
 
           console.log("Site-limit polygons:", data.siteLimitPolygons);
           console.log("Site-limit paths count:", data.siteLimitPaths.length);
           console.log("Site-limit paths:", data.siteLimitPaths);
 
           console.log("Selected paths:", data.selectedPaths);
-
           console.log("Inside paths:", data.insidePaths);
           console.log("Outside paths:", data.outsidePaths);
 
-          const selectedInside = data.selectedPaths.filter((p) => data.siteLimitSet.has(p));
-          const selectedOutside = data.selectedPaths.filter((p) => !data.siteLimitSet.has(p));
-
-          console.log("Selected inside site limit:", selectedInside);
-          console.log("Selected outside site limit:", selectedOutside);
+          console.log("Selected inside:", data.selectedPaths.filter((p) => data.siteSet.has(p)));
+          console.log("Selected outside:", data.selectedPaths.filter((p) => !data.siteSet.has(p)));
         } catch (err) {
           console.error("Classification debug failed:", err);
         } finally {
@@ -458,16 +452,12 @@
 
       async function recolorGeometry() {
         try {
-          const {
-            terrainPaths,
-            insidePaths,
-            outsidePaths
-          } = await classifyGeometry();
+          const { allPaths, insidePaths, outsidePaths } = await classifyGeometry();
 
           console.group("Forma recolor debug");
-          console.log("Terrain paths:", terrainPaths);
-          console.log("Inside paths:", insidePaths);
-          console.log("Outside paths:", outsidePaths);
+          console.log("All paths count:", allPaths.length);
+          console.log("Inside paths count:", insidePaths.length);
+          console.log("Outside paths count:", outsidePaths.length);
           console.log("Selection paths:", selectionPaths);
 
           const pathsToColor = new Map();
@@ -490,7 +480,7 @@
             }
           }
 
-          console.log("Final pathsToColor:", Array.from(pathsToColor.entries()));
+          console.log("Final pathsToColor entries:", Array.from(pathsToColor.entries()));
           console.groupEnd();
 
           await Forma.render.elementColors.clearAll();
