@@ -111,7 +111,7 @@
   <body>
     <div class="panel">
       <div class="section">
-        <h2>Axonometric View</h2>
+        <h2>Axonometric View :)</h2>
 
         <label class="row" style="flex-direction: row;">
           <input id="axonometryEnabled" type="checkbox" />
@@ -157,7 +157,7 @@
             <div id="outsidePreview" class="preview" style="background:#d95f5f"></div>
             <span>Outside site limit</span>
           </div>
-          <div class="hint">Anything not positively identified as inside is treated as outside.</div>
+          <div class="hint">Anything not identified as inside is treated as outside.</div>
         </div>
 
         <label class="row" style="flex-direction: row;">
@@ -383,6 +383,18 @@
               all.push(p);
             }
           }
+        }
+
+        try {
+          const virtualPaths = await Forma.geometry.getPathsForVirtualElements();
+          for (const p of virtualPaths || []) {
+            if (!seen.has(p)) {
+              seen.add(p);
+              all.push(p);
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to fetch virtual element paths:", err);
         }
 
         return all;
