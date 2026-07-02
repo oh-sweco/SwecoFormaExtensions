@@ -106,12 +106,30 @@
         font-size: 13px;
         color: #666;
       }
+
+      .btn-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid rgba(127, 127, 127, 0.5);
+        background: transparent;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: rgba(127, 127, 127, 0.12);
+      }
     </style>
   </head>
   <body>
     <div class="panel">
       <div class="section">
-        <h2>Axonometric View :)</h2>
+        <h2>Axonometric View</h2>
 
         <label class="row" style="flex-direction: row;">
           <input id="axonometryEnabled" type="checkbox" />
@@ -173,6 +191,10 @@
           </div>
           <div class="hint">Selection is applied last and overrides the other two geometry colors.</div>
         </div>
+
+        <div class="btn-row">
+          <button id="debugGeometryBtn" type="button">Run debug logs</button>
+        </div>
       </div>
 
       <div class="section">
@@ -226,6 +248,8 @@
       const terrainControls = document.getElementById("terrainControls");
       const terrainColor = document.getElementById("terrainColor");
       const terrainPreview = document.getElementById("terrainPreview");
+
+      const debugGeometryBtn = document.getElementById("debugGeometryBtn");
 
       const TERRAIN_TEXTURE_NAME = "terrainColor";
       const DRAG_DELAY_MS = 80;
@@ -287,9 +311,8 @@
 
           const dx = position.x - target.x;
           const dy = position.y - target.y;
-          const dz = position.z - target.z;
 
-          const distance = Math.hypot(dx, dy, dz) || 100;
+          const distance = Math.hypot(dx, dy, position.z - target.z) || 100;
           const azimuth = Math.atan2(dy, dx);
 
           const elevation = toRadians(angleDeg);
@@ -371,12 +394,14 @@
         return polygons;
       }
 
-      async function getAllCandidatePaths() {
+      async function getAllCategoryPaths() {
         const all = [];
         const seen = new Set();
+        const categoryCounts = {};
 
         for (const category of GEOMETRY_CATEGORIES) {
           const paths = await getPathsByCategorySafe(category);
+          categoryCounts[category] = paths.length;
           for (const p of paths || []) {
             if (!seen.has(p)) {
               seen.add(p);
@@ -384,6 +409,12 @@
             }
           }
         }
+
+        return { all, seen, categoryCounts };
+      }
+
+      async function getAllCandidatePaths() {
+        const { all, seen } = await getAllCategoryPaths();
 
         try {
           const virtualPaths = await Forma.geometry.getPathsForVirtualElements();
@@ -422,6 +453,87 @@
         const outside = allPaths.filter((p) => !insideSet.has(p));
 
         return { inside, outside };
+      }
+
+      async function debugGeometryDiscovery() {
+        console.group("Forma geometry discovery debug");
+
+        try {
+          const { all, categoryCounts } = await getAllCategoryPaths();
+          console.log("Category counts:", categoryCounts);
+          console.log("Category candidate count:", all.length);
+
+          let virtualPaths = [];
+          try {
+            virtualPaths = await Forma.geometry.getPathsForVirtualElements();
+            console.log("Virtual paths count:", virtualPaths.length);
+            console.log("Virtual paths:", virtualPaths);
+          } catch (err) {
+            console.error("Failed to fetch virtual paths:", err);
+          }
+
+          const merged = new Set([...all, ...virtualPaths]);
+          console.log("Merged candidate count:", merged.size);
+          console.log("Merged candidate paths:", Array.from(merged));
+        } catch (err) {
+          console.error("Geometry discovery debug failed:", err);
+        } finally {
+          console.groupEnd();
+        }
+      }
+
+      async function debugSelectedGeometry() {
+        console.group("Forma selected geometry debug");
+
+        try {
+          const selected = await Forma.selection.getSelection();
+          console.log("Selected paths:", selected);
+          console.log("Selected path count:", selected.length);
+
+          const [siteLimitPolygons, candidates, virtualPaths] = await Promise.all([
+            getSiteLimitPolygons(),
+            getAllCategoryPaths(),
+            Forma.geometry.getPathsForVirtualElements().catch(() => [])
+          ]);
+
+          const candidateSet = new Set([
+            ...candidates.all,
+            ...(virtualPaths || [])
+          ]);
+
+          console.log("Selected paths in candidate universe:", selected.filter((p) => candidateSet.has(p)));
+          console.log("Selected paths missing from candidate universe:", selected.filter((p) => !candidateSet.has(p)));
+
+          for (const path of selected) {
+            console.group(`Selected path: ${path}`);
+            console.log("In category universe:", candidateSet.has(path));
+            console.log("Is virtual:", (virtualPaths || []).includes(path));
+
+            try {
+              const footprint = await Forma.geometry.getFootprint({ path });
+              console.log("Footprint:", footprint);
+            } catch (err) {
+              console.warn("Failed to fetch footprint:", err);
+            }
+
+            try {
+              if (siteLimitPolygons.length) {
+                const inside = await Forma.geometry.getPathsInsidePolygons({ polygons: siteLimitPolygons });
+                console.log("Inside site limit:", inside.includes(path));
+              } else {
+                console.log("Inside site limit: no site-limit polygons found");
+              }
+            } catch (err) {
+              console.warn("Failed inside test:", err);
+            }
+
+            console.groupEnd();
+          }
+        } catch (err) {
+          console.error("Selected geometry debug failed:", err);
+        } finally {
+          console.groupEnd();
+        }
       }
 
       async function recolorGeometry() {
@@ -584,6 +696,11 @@
       angleInput.addEventListener("input", () => scheduleLiveUpdate(Number(angleInput.value)));
       angleInput.addEventListener("change", () => commitAxonometry(Number(angleInput.value)));
       angleInput.addEventListener("pointerup", () => commitAxonometry(Number(angleInput.value)));
+
+      debugGeometryBtn.addEventListener("click", async () => {
+        await debugGeometryDiscovery();
+        await debugSelectedGeometry();
+      });
 
       setPreview(insidePreview, insideColor.value);
       setPreview(outsidePreview, outsideColor.value);
