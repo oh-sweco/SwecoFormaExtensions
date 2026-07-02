@@ -189,7 +189,7 @@
             <div id="selectionPreview" class="preview" style="background:#00ff00"></div>
             <span>Selection override</span>
           </div>
-          <div class="hint">Selection is applied last and overrides the other two geometry colors.</div>
+          <div class="hint">Selection is applied last and overrides the other geometry colors.</div>
         </div>
 
         <div class="btn-row">
@@ -394,14 +394,12 @@
         return polygons;
       }
 
-      async function getAllCategoryPaths() {
+      async function getAllCandidatePaths() {
         const all = [];
         const seen = new Set();
-        const categoryCounts = {};
 
         for (const category of GEOMETRY_CATEGORIES) {
           const paths = await getPathsByCategorySafe(category);
-          categoryCounts[category] = paths.length;
           for (const p of paths || []) {
             if (!seen.has(p)) {
               seen.add(p);
@@ -409,12 +407,6 @@
             }
           }
         }
-
-        return { all, seen, categoryCounts };
-      }
-
-      async function getAllCandidatePaths() {
-        const { all, seen } = await getAllCategoryPaths();
 
         try {
           const virtualPaths = await Forma.geometry.getPathsForVirtualElements();
@@ -431,50 +423,53 @@
         return all;
       }
 
-      async function getInsideOutsidePaths() {
+      async function classifyPaths() {
         const [siteLimitPolygons, allPaths] = await Promise.all([
           getSiteLimitPolygons(),
           getAllCandidatePaths()
         ]);
 
-        if (!allPaths.length) {
-          return { inside: [], outside: [] };
-        }
-
-        if (!siteLimitPolygons.length) {
-          return { inside: [], outside: allPaths };
-        }
-
-        const inside = await Forma.geometry.getPathsInsidePolygons({
-          polygons: siteLimitPolygons
-        });
+        const inside = siteLimitPolygons.length
+          ? await Forma.geometry.getPathsInsidePolygons({ polygons: siteLimitPolygons })
+          : [];
 
         const insideSet = new Set(inside);
-        const outside = allPaths.filter((p) => !insideSet.has(p));
+        const candidateSet = new Set(allPaths);
 
-        return { inside, outside };
+        const insideCandidates = allPaths.filter((p) => insideSet.has(p));
+        const outsideCandidates = allPaths.filter((p) => !insideSet.has(p));
+
+        return {
+          siteLimitPolygons,
+          allPaths,
+          candidateSet,
+          inside,
+          insideCandidates,
+          outsideCandidates
+        };
       }
 
       async function debugGeometryDiscovery() {
         console.group("Forma geometry discovery debug");
 
         try {
-          const { all, categoryCounts } = await getAllCategoryPaths();
-          console.log("Category counts:", categoryCounts);
-          console.log("Category candidate count:", all.length);
+          const categoryCounts = {};
+          const categoryUniverse = [];
 
-          let virtualPaths = [];
-          try {
-            virtualPaths = await Forma.geometry.getPathsForVirtualElements();
-            console.log("Virtual paths count:", virtualPaths.length);
-            console.log("Virtual paths:", virtualPaths);
-          } catch (err) {
-            console.error("Failed to fetch virtual paths:", err);
+          for (const category of GEOMETRY_CATEGORIES) {
+            const paths = await getPathsByCategorySafe(category);
+            categoryCounts[category] = paths.length;
+            categoryUniverse.push(...paths);
           }
 
-          const merged = new Set([...all, ...virtualPaths]);
-          console.log("Merged candidate count:", merged.size);
-          console.log("Merged candidate paths:", Array.from(merged));
+          const virtualPaths = await Forma.geometry.getPathsForVirtualElements().catch(() => []);
+          const merged = Array.from(new Set([...categoryUniverse, ...virtualPaths]));
+
+          console.log("Category counts:", categoryCounts);
+          console.log("Category universe count:", categoryUniverse.length);
+          console.log("Virtual paths count:", virtualPaths.length);
+          console.log("Merged candidate count:", merged.length);
+          console.log("Merged candidate paths:", merged);
         } catch (err) {
           console.error("Geometry discovery debug failed:", err);
         } finally {
@@ -490,41 +485,43 @@
           console.log("Selected paths:", selected);
           console.log("Selected path count:", selected.length);
 
-          const [siteLimitPolygons, candidates, virtualPaths] = await Promise.all([
+          const [siteLimitPolygons, categoryUniverse, virtualPaths] = await Promise.all([
             getSiteLimitPolygons(),
-            getAllCategoryPaths(),
+            (async () => {
+              const all = [];
+              for (const category of GEOMETRY_CATEGORIES) {
+                const paths = await getPathsByCategorySafe(category);
+                all.push(...paths);
+              }
+              return all;
+            })(),
             Forma.geometry.getPathsForVirtualElements().catch(() => [])
           ]);
 
-          const candidateSet = new Set([
-            ...candidates.all,
-            ...(virtualPaths || [])
-          ]);
+          const candidateSet = new Set([...categoryUniverse, ...virtualPaths]);
+          console.log("Selected in candidate universe:", selected.filter((p) => candidateSet.has(p)));
+          console.log("Selected missing from candidate universe:", selected.filter((p) => !candidateSet.has(p)));
 
-          console.log("Selected paths in candidate universe:", selected.filter((p) => candidateSet.has(p)));
-          console.log("Selected paths missing from candidate universe:", selected.filter((p) => !candidateSet.has(p)));
+          if (siteLimitPolygons.length) {
+            const inside = await Forma.geometry.getPathsInsidePolygons({ polygons: siteLimitPolygons });
+            const insideSet = new Set(inside);
+            console.log("Selected inside site limit:", selected.filter((p) => insideSet.has(p)));
+            console.log("Selected outside site limit:", selected.filter((p) => !insideSet.has(p)));
+          } else {
+            console.log("No site-limit polygons found.");
+          }
 
           for (const path of selected) {
             console.group(`Selected path: ${path}`);
-            console.log("In category universe:", candidateSet.has(path));
-            console.log("Is virtual:", (virtualPaths || []).includes(path));
+
+            console.log("In candidate universe:", candidateSet.has(path));
+            console.log("Is virtual:", virtualPaths.includes(path));
 
             try {
               const footprint = await Forma.geometry.getFootprint({ path });
               console.log("Footprint:", footprint);
             } catch (err) {
               console.warn("Failed to fetch footprint:", err);
-            }
-
-            try {
-              if (siteLimitPolygons.length) {
-                const inside = await Forma.geometry.getPathsInsidePolygons({ polygons: siteLimitPolygons });
-                console.log("Inside site limit:", inside.includes(path));
-              } else {
-                console.log("Inside site limit: no site-limit polygons found");
-              }
-            } catch (err) {
-              console.warn("Failed inside test:", err);
             }
 
             console.groupEnd();
@@ -538,27 +535,43 @@
 
       async function recolorGeometry() {
         try {
-          await Forma.render.elementColors.clearAll();
+          const { insideCandidates, outsideCandidates, allPaths, inside } = await classifyPaths();
 
-          const { inside, outside } = await getInsideOutsidePaths();
+          console.group("Forma recolor debug");
+          console.log("All candidate paths:", allPaths);
+          console.log("Inside paths:", inside);
+          console.log("Inside candidates:", insideCandidates);
+          console.log("Outside candidates:", outsideCandidates);
+
           const pathsToColor = new Map();
 
           if (outsideEnabled.checked && isValidHexColor(outsideColor.value)) {
-            for (const path of outside) pathsToColor.set(path, outsideColor.value);
+            for (const path of outsideCandidates) {
+              pathsToColor.set(path, outsideColor.value);
+            }
           }
 
           if (insideEnabled.checked && isValidHexColor(insideColor.value)) {
-            for (const path of inside) pathsToColor.set(path, insideColor.value);
+            for (const path of insideCandidates) {
+              pathsToColor.set(path, insideColor.value);
+            }
           }
 
           if (selectionEnabled.checked && isValidHexColor(selectionColor.value)) {
-            for (const path of selectionPaths) pathsToColor.set(path, selectionColor.value);
+            for (const path of selectionPaths) {
+              pathsToColor.set(path, selectionColor.value);
+            }
           }
+
+          console.log("Final pathsToColor entries:", Array.from(pathsToColor.entries()));
+          console.groupEnd();
+
+          await Forma.render.elementColors.clearAll();
 
           if (pathsToColor.size > 0) {
             await Forma.render.elementColors.set({ pathsToColor });
             setStatus(
-              `Applied geometry colors. Inside: ${inside.length}, outside: ${outside.length}, selection: ${selectionPaths.length}.`
+              `Applied geometry colors. Inside: ${insideCandidates.length}, outside: ${outsideCandidates.length}, selection: ${selectionPaths.length}.`
             );
           } else {
             setStatus("Geometry coloring is enabled, but no colors are active.");
