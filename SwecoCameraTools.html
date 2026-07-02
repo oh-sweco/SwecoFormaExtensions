@@ -143,7 +143,7 @@
             <div id="insidePreview" class="preview" style="background:#4f8cff"></div>
             <span>Inside site limit</span>
           </div>
-          <div class="hint">Uses the actual Forma categories and site-limit polygons.</div>
+          <div class="hint">Uses site-limit polygons and actual geometry paths.</div>
         </div>
 
         <label class="row" style="flex-direction: row;">
@@ -157,7 +157,7 @@
             <div id="outsidePreview" class="preview" style="background:#d95f5f"></div>
             <span>Outside site limit</span>
           </div>
-          <div class="hint">Includes building, tree, road, rail, boundary, zone, constraints, vegetation, and generics.</div>
+          <div class="hint">Anything not positively identified as inside is treated as outside.</div>
         </div>
 
         <label class="row" style="flex-direction: row;">
@@ -393,6 +393,10 @@
           getSiteLimitPolygons(),
           getAllCandidatePaths()
         ]);
+
+        if (!allPaths.length) {
+          return { inside: [], outside: [] };
+        }
 
         if (!siteLimitPolygons.length) {
           return { inside: [], outside: allPaths };
