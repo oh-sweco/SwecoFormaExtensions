@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Forma Project Coordinates</title>
+
+  <style>
+    :root {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #202124;
+      background: #f5f6f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+    }
+
+    .panel {
+      max-width: 420px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #ffffff;
+      border: 1px solid #d9dde2;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 21px;
+      font-weight: 600;
+    }
+
+    .description {
+      margin: 0 0 18px;
+      color: #5f6368;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .section {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #e5e7eb;
+    }
+
+    .section h2 {
+      margin: 0 0 10px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 7px 0;
+      font-size: 14px;
+    }
+
+    .label {
+      color: #5f6368;
+    }
+
+    .value {
+      font-family: Consolas, Monaco, monospace;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 18px;
+      padding: 10px 14px;
+      border: 0;
+      border-radius: 6px;
+      background: #1769aa;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #12578d;
+    }
+
+    button:disabled {
+      background: #9aa0a6;
+      cursor: wait;
+    }
+
+    #status {
+      min-height: 18px;
+      margin-top: 12px;
+      color: #5f6368;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .error {
+      color: #b3261e !important;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="panel">
+    <h1>Project Coordinates</h1>
+    <p class="description">
+      Project latitude and longitude converted to WGS84 / UTM zone 32.
+    </p>
+
+    <section>
+      <div class="row">
+        <span class="label">Latitude</span>
+        <span class="value" id="latitude">—</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Longitude</span>
+        <span class="value" id="longitude">—</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>UTM 32</h2>
+
+      <div class="row">
+        <span class="label">Zone</span>
+        <span class="value" id="utmZone">32</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Hemisphere</span>
+        <span class="value" id="utmHemisphere">—</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Easting</span>
+        <span class="value" id="easting">—</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Northing</span>
+        <span class="value" id="northing">—</span>
+      </div>
+
+      <div class="row">
+        <span class="label">CRS</span>
+        <span class="value" id="crs">—</span>
+      </div>
+    </section>
+
+    <button id="refreshButton" type="button">
+      Refresh coordinates
+    </button>
+
+    <div id="status" role="status"></div>
+  </main>
+
+  <script>
+    /*
+     * WGS84 latitude/longitude to UTM conversion.
+     *
+     * This extension uses UTM zone 32, whose central meridian is 9° E.
+     * Northern hemisphere CRS: EPSG:32632
+     * Southern hemisphere CRS: EPSG:32732
+     */
+
+    function latLonToUtm32(latitude, longitude) {
+      const a = 6378137.0;                 // WGS84 semi-major axis
+      const eccSquared = 0.00669437999014;
+      const k0 = 0.9996;
+      const zone = 32;
+      const centralMeridian = 9.0;
+
+      const latitudeRadians = latitude * Math.PI / 180.0;
+      const longitudeRadians = longitude * Math.PI / 180.0;
+      const centralMeridianRadians = centralMeridian * Math.PI / 180.0;
+
+      const eccPrimeSquared =
+        eccSquared / (1.0 - eccSquared);
+
+      const sinLatitude = Math.sin(latitudeRadians);
+      const cosLatitude = Math.cos(latitudeRadians);
+      const tanLatitude = Math.tan(latitudeRadians);
+
+      const n = a / Math.sqrt(
+        1.0 - eccSquared * sinLatitude * sinLatitude
+      );
+
+      const t = tanLatitude * tanLatitude;
+      const c = eccPrimeSquared * cosLatitude * cosLatitude;
+      const aTerm =
+        cosLatitude *
+        (longitudeRadians - centralMeridianRadians);
+
+      const meridionalArc =
+        a * (
+          (1 -
+            eccSquared / 4 -
+            3 * eccSquared * eccSquared / 64 -
+            5 * eccSquared * eccSquared * eccSquared / 256
+          ) * latitudeRadians
+          -
+          (3 * eccSquared / 8 +
+            3 * eccSquared * eccSquared / 32 +
+            45 * eccSquared * eccSquared * eccSquared / 1024
+          ) * Math.sin(2 * latitudeRadians)
+          +
+          (15 * eccSquared * eccSquared / 256 +
+            45 * eccSquared * eccSquared * eccSquared / 1024
+          ) * Math.sin(4 * latitudeRadians)
+          -
+          (35 * eccSquared * eccSquared * eccSquared / 3072) *
+          Math.sin(6 * latitudeRadians)
+        );
+
+      let easting =
+        k0 * n * (
+          aTerm +
+          (1 - t + c) * Math.pow(aTerm, 3) / 6 +
+          (5 - 18 * t + t * t + 72 * c -
+            58 * eccPrimeSquared) *
+          Math.pow(aTerm, 5) / 120
+        ) + 500000.0;
+
+      let northing =
+        k0 * (
+          meridionalArc +
+          n * tanLatitude * (
+            aTerm * aTerm / 2 +
+            (5 - t + 9 * c + 4 * c * c) *
+            Math.pow(aTerm, 4) / 24 +
+            (61 - 58 * t + t * t + 600 * c -
+              330 * eccPrimeSquared) *
+            Math.pow(aTerm, 6) / 720
+          )
+        );
+
+      let hemisphere;
+      let epsg;
+
+      if (latitude < 0) {
+        northing += 10000000.0;
+        hemisphere = "South";
+        epsg = "EPSG:32732";
+      } else {
+        hemisphere = "North";
+        epsg = "EPSG:32632";
+      }
+
+      return {
+        zone,
+        hemisphere,
+        epsg,
+        easting,
+        northing
+      };
+    }
+
+    function formatNumber(value, decimals = 3) {
+      return Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals
+      });
+    }
+
+    function setStatus(message, isError = false) {
+      const status = document.getElementById("status");
+      status.textContent = message;
+      status.classList.toggle("error", isError);
+    }
+
+    function displayCoordinates(latitude, longitude) {
+      const utm = latLonToUtm32(latitude, longitude);
+
+      document.getElementById("latitude").textContent =
+        `${latitude.toFixed(8)}°`;
+
+      document.getElementById("longitude").textContent =
+        `${longitude.toFixed(8)}°`;
+
+      document.getElementById("utmZone").textContent =
+        `${utm.zone}`;
+
+      document.getElementById("utmHemisphere").textContent =
+        utm.hemisphere;
+
+      document.getElementById("easting").textContent =
+        `${formatNumber(utm.easting)} m`;
+
+      document.getElementById("northing").textContent =
+        `${formatNumber(utm.northing)} m`;
+
+      document.getElementById("crs").textContent =
+        utm.epsg;
+    }
+
+    async function loadProjectCoordinates() {
+      const refreshButton = document.getElementById("refreshButton");
+
+      refreshButton.disabled = true;
+      setStatus("Reading project location…");
+
+      try {
+        /*
+         * Forma is provided by the Autodesk Forma embedded-view SDK
+         * when this page is loaded as an extension.
+         */
+        if (
+          !globalThis.Forma ||
+          !globalThis.Forma.project ||
+          typeof globalThis.Forma.project.getGeoLocation !== "function"
+        ) {
+          throw new Error(
+            "The Forma SDK is not available. Open this page from a Forma extension."
+          );
+        }
+
+        const geoLocation =
+          await globalThis.Forma.project.getGeoLocation();
+
+        if (
+          !geoLocation ||
+          !Array.isArray(geoLocation) ||
+          geoLocation.length < 2
+        ) {
+          throw new Error(
+            "No geolocation is available for the current project."
+          );
+        }
+
+        const latitude = Number(geoLocation[0]);
+        const longitude = Number(geoLocation[1]);
+
+        if (
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180
+        ) {
+          throw new Error("Forma returned invalid latitude or longitude.");
+        }
+
+        displayCoordinates(latitude, longitude);
+        setStatus("Coordinates updated.");
+      } catch (error) {
+        console.error(error);
+        setStatus(error.message || "Unable to read project coordinates.", true);
+      } finally {
+        refreshButton.disabled = false;
+      }
+    }
+
+    document
+      .getElementById("refreshButton")
+      .addEventListener("click", loadProjectCoordinates);
+
+    document.addEventListener("DOMContentLoaded", loadProjectCoordinates);
+  </script>
+</body>
+</html>
