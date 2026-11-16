@@ -81,7 +81,7 @@
       border: 0;
       border-radius: 6px;
       background: #1769aa;
-      color: white;
+      color: #ffffff;
       font-size: 14px;
       cursor: pointer;
     }
@@ -103,8 +103,8 @@
       line-height: 1.4;
     }
 
-    .error {
-      color: #b3261e !important;
+    #status.error {
+      color: #b3261e;
     }
   </style>
 </head>
@@ -112,6 +112,7 @@
 <body>
   <main class="panel">
     <h1>Project Coordinates</h1>
+
     <p class="description">
       Project latitude and longitude converted to WGS84 / UTM zone 32.
     </p>
@@ -164,85 +165,160 @@
     <div id="status" role="status"></div>
   </main>
 
-  <script>
+  <!--
+    Important:
+    This must be a module script.
+    It is placed after the HTML so all elements already exist.
+  -->
+  <script type="module">
     import { Forma } from "https://esm.sh/forma-embedded-view-sdk/auto";
-      window.Forma = Forma;
+
+    const elements = {
+      latitude: document.getElementById("latitude"),
+      longitude: document.getElementById("longitude"),
+      utmZone: document.getElementById("utmZone"),
+      utmHemisphere: document.getElementById("utmHemisphere"),
+      easting: document.getElementById("easting"),
+      northing: document.getElementById("northing"),
+      crs: document.getElementById("crs"),
+      refreshButton: document.getElementById("refreshButton"),
+      status: document.getElementById("status")
+    };
+
+    function setStatus(message, isError = false) {
+      elements.status.textContent = message;
+      elements.status.classList.toggle("error", isError);
+    }
+
+    function formatNumber(value, decimals = 3) {
+      return Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals
+      });
+    }
+
     /*
-     * WGS84 latitude/longitude to UTM conversion.
+     * Converts WGS84 latitude/longitude to UTM zone 32.
      *
-     * This extension uses UTM zone 32, whose central meridian is 9° E.
-     * Northern hemisphere CRS: EPSG:32632
-     * Southern hemisphere CRS: EPSG:32732
+     * Northern hemisphere: EPSG:32632
+     * Southern hemisphere: EPSG:32732
      */
-
     function latLonToUtm32(latitude, longitude) {
-      const a = 6378137.0;                 // WGS84 semi-major axis
-      const eccSquared = 0.00669437999014;
-      const k0 = 0.9996;
-      const zone = 32;
-      const centralMeridian = 9.0;
+      const semiMajorAxis = 6378137.0;
+      const eccentricitySquared = 0.00669437999014;
+      const scaleFactor = 0.9996;
+      const centralMeridianDegrees = 9.0;
 
-      const latitudeRadians = latitude * Math.PI / 180.0;
-      const longitudeRadians = longitude * Math.PI / 180.0;
-      const centralMeridianRadians = centralMeridian * Math.PI / 180.0;
+      const latitudeRadians = latitude * Math.PI / 180;
+      const longitudeRadians = longitude * Math.PI / 180;
+      const centralMeridianRadians =
+        centralMeridianDegrees * Math.PI / 180;
 
-      const eccPrimeSquared =
-        eccSquared / (1.0 - eccSquared);
+      const secondEccentricitySquared =
+        eccentricitySquared /
+        (1 - eccentricitySquared);
 
       const sinLatitude = Math.sin(latitudeRadians);
       const cosLatitude = Math.cos(latitudeRadians);
       const tanLatitude = Math.tan(latitudeRadians);
 
-      const n = a / Math.sqrt(
-        1.0 - eccSquared * sinLatitude * sinLatitude
-      );
+      const radiusOfCurvature =
+        semiMajorAxis /
+        Math.sqrt(
+          1 -
+          eccentricitySquared *
+          sinLatitude *
+          sinLatitude
+        );
 
-      const t = tanLatitude * tanLatitude;
-      const c = eccPrimeSquared * cosLatitude * cosLatitude;
-      const aTerm =
+      const tangentSquared = tanLatitude * tanLatitude;
+
+      const latitudeComponent =
+        secondEccentricitySquared *
+        cosLatitude *
+        cosLatitude;
+
+      const longitudeComponent =
         cosLatitude *
         (longitudeRadians - centralMeridianRadians);
 
       const meridionalArc =
-        a * (
-          (1 -
-            eccSquared / 4 -
-            3 * eccSquared * eccSquared / 64 -
-            5 * eccSquared * eccSquared * eccSquared / 256
+        semiMajorAxis *
+        (
+          (
+            1 -
+            eccentricitySquared / 4 -
+            3 * eccentricitySquared ** 2 / 64 -
+            5 * eccentricitySquared ** 3 / 256
           ) * latitudeRadians
           -
-          (3 * eccSquared / 8 +
-            3 * eccSquared * eccSquared / 32 +
-            45 * eccSquared * eccSquared * eccSquared / 1024
+          (
+            3 * eccentricitySquared / 8 +
+            3 * eccentricitySquared ** 2 / 32 +
+            45 * eccentricitySquared ** 3 / 1024
           ) * Math.sin(2 * latitudeRadians)
           +
-          (15 * eccSquared * eccSquared / 256 +
-            45 * eccSquared * eccSquared * eccSquared / 1024
+          (
+            15 * eccentricitySquared ** 2 / 256 +
+            45 * eccentricitySquared ** 3 / 1024
           ) * Math.sin(4 * latitudeRadians)
           -
-          (35 * eccSquared * eccSquared * eccSquared / 3072) *
-          Math.sin(6 * latitudeRadians)
+          (
+            35 * eccentricitySquared ** 3 / 3072
+          ) * Math.sin(6 * latitudeRadians)
         );
 
       let easting =
-        k0 * n * (
-          aTerm +
-          (1 - t + c) * Math.pow(aTerm, 3) / 6 +
-          (5 - 18 * t + t * t + 72 * c -
-            58 * eccPrimeSquared) *
-          Math.pow(aTerm, 5) / 120
-        ) + 500000.0;
+        scaleFactor *
+        radiusOfCurvature *
+        (
+          longitudeComponent
+          +
+          (
+            1 -
+            tangentSquared +
+            latitudeComponent
+          ) *
+          longitudeComponent ** 3 / 6
+          +
+          (
+            5 -
+            18 * tangentSquared +
+            tangentSquared ** 2 +
+            72 * latitudeComponent -
+            58 * secondEccentricitySquared
+          ) *
+          longitudeComponent ** 5 / 120
+        )
+        +
+        500000.0;
 
       let northing =
-        k0 * (
-          meridionalArc +
-          n * tanLatitude * (
-            aTerm * aTerm / 2 +
-            (5 - t + 9 * c + 4 * c * c) *
-            Math.pow(aTerm, 4) / 24 +
-            (61 - 58 * t + t * t + 600 * c -
-              330 * eccPrimeSquared) *
-            Math.pow(aTerm, 6) / 720
+        scaleFactor *
+        (
+          meridionalArc
+          +
+          radiusOfCurvature *
+          tanLatitude *
+          (
+            longitudeComponent ** 2 / 2
+            +
+            (
+              5 -
+              tangentSquared +
+              9 * latitudeComponent +
+              4 * latitudeComponent ** 2
+            ) *
+            longitudeComponent ** 4 / 24
+            +
+            (
+              61 -
+              58 * tangentSquared +
+              tangentSquared ** 2 +
+              600 * latitudeComponent -
+              330 * secondEccentricitySquared
+            ) *
+            longitudeComponent ** 6 / 720
           )
         );
 
@@ -259,7 +335,7 @@
       }
 
       return {
-        zone,
+        zone: 32,
         hemisphere,
         epsg,
         easting,
@@ -267,75 +343,74 @@
       };
     }
 
-    function formatNumber(value, decimals = 3) {
-      return Number(value).toLocaleString(undefined, {
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: decimals
-      });
-    }
-
-    function setStatus(message, isError = false) {
-      const status = document.getElementById("status");
-      status.textContent = message;
-      status.classList.toggle("error", isError);
-    }
-
     function displayCoordinates(latitude, longitude) {
       const utm = latLonToUtm32(latitude, longitude);
 
-      document.getElementById("latitude").textContent =
+      elements.latitude.textContent =
         `${latitude.toFixed(8)}°`;
 
-      document.getElementById("longitude").textContent =
+      elements.longitude.textContent =
         `${longitude.toFixed(8)}°`;
 
-      document.getElementById("utmZone").textContent =
-        `${utm.zone}`;
+      elements.utmZone.textContent =
+        String(utm.zone);
 
-      document.getElementById("utmHemisphere").textContent =
+      elements.utmHemisphere.textContent =
         utm.hemisphere;
 
-      document.getElementById("easting").textContent =
+      elements.easting.textContent =
         `${formatNumber(utm.easting)} m`;
 
-      document.getElementById("northing").textContent =
+      elements.northing.textContent =
         `${formatNumber(utm.northing)} m`;
 
-      document.getElementById("crs").textContent =
+      elements.crs.textContent =
         utm.epsg;
     }
 
     async function loadProjectCoordinates() {
-      const refreshButton = document.getElementById("refreshButton");
-
-      refreshButton.disabled = true;
+      elements.refreshButton.disabled = true;
       setStatus("Reading project location…");
 
       try {
-        /*
-         * Forma is provided by the Autodesk Forma embedded-view SDK
-         * when this page is loaded as an extension.
-         */
+        console.log("Forma SDK:", Forma);
+        console.log("Forma project API:", Forma.project);
+
+        if (!Forma || !Forma.project) {
+          throw new Error(
+            "The Forma project API is not available."
+          );
+        }
+
         if (
-          !globalThis.Forma ||
-          !globalThis.Forma.project ||
-          typeof globalThis.Forma.project.getGeoLocation !== "function"
+          typeof Forma.project.getGeoLocation !== "function"
         ) {
           throw new Error(
-            "The Forma SDK is not available. Open this page from a Forma extension."
+            "Forma.project.getGeoLocation() is not available."
           );
         }
 
         const geoLocation =
-          await globalThis.Forma.project.getGeoLocation();
+          await Forma.project.getGeoLocation();
+
+        console.log(
+          "Geolocation returned by Forma:",
+          geoLocation
+        );
+
+        if (!geoLocation) {
+          throw new Error(
+            "No geolocation is configured for this project."
+          );
+        }
 
         if (
-          !geoLocation ||
           !Array.isArray(geoLocation) ||
           geoLocation.length < 2
         ) {
           throw new Error(
-            "No geolocation is available for the current project."
+            "Unexpected geolocation format: " +
+            JSON.stringify(geoLocation)
           );
         }
 
@@ -344,30 +419,51 @@
 
         if (
           !Number.isFinite(latitude) ||
-          !Number.isFinite(longitude) ||
-          latitude < -90 ||
-          latitude > 90 ||
-          longitude < -180 ||
-          longitude > 180
+          !Number.isFinite(longitude)
         ) {
-          throw new Error("Forma returned invalid latitude or longitude.");
+          throw new Error(
+            "Invalid coordinates returned by Forma: " +
+            JSON.stringify(geoLocation)
+          );
+        }
+
+        if (latitude < -90 || latitude > 90) {
+          throw new Error(
+            "Latitude is outside the valid range."
+          );
+        }
+
+        if (longitude < -180 || longitude > 180) {
+          throw new Error(
+            "Longitude is outside the valid range."
+          );
         }
 
         displayCoordinates(latitude, longitude);
         setStatus("Coordinates updated.");
       } catch (error) {
-        console.error(error);
-        setStatus(error.message || "Unable to read project coordinates.", true);
+        console.error(
+          "Failed to read project coordinates:",
+          error
+        );
+
+        setStatus(
+          error?.message ||
+          "Unable to read project coordinates.",
+          true
+        );
       } finally {
-        refreshButton.disabled = false;
+        elements.refreshButton.disabled = false;
       }
     }
 
-    document
-      .getElementById("refreshButton")
-      .addEventListener("click", loadProjectCoordinates);
+    elements.refreshButton.addEventListener(
+      "click",
+      loadProjectCoordinates
+    );
 
-    document.addEventListener("DOMContentLoaded", loadProjectCoordinates);
+    // Run after the module and HTML have loaded.
+    loadProjectCoordinates();
   </script>
 </body>
 </html>
